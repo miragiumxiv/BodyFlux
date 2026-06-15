@@ -1,0 +1,50 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11612.150
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BodyFlux", "BodyFlux\BodyFlux.csproj", "{298C724E-3ECC-46A1-A187-896AD641A0AD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BodyFluxRelay", "BodyFluxRelay\BodyFluxRelay.csproj", "{FDA8F514-DD28-4593-B043-5736C5A951DD}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|Any CPU.Build.0 = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|x64.ActiveCfg = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|x64.Build.0 = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|x86.ActiveCfg = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Debug|x86.Build.0 = Debug|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|Any CPU.ActiveCfg = Release|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|Any CPU.Build.0 = Release|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|x64.ActiveCfg = Release|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|x64.Build.0 = Release|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|x86.ActiveCfg = Release|x64
+		{298C724E-3ECC-46A1-A187-896AD641A0AD}.Release|x86.Build.0 = Release|x64
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|x64.Build.0 = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Debug|x86.Build.0 = Debug|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|x64.ActiveCfg = Release|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|x64.Build.0 = Release|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|x86.ActiveCfg = Release|Any CPU
+		{FDA8F514-DD28-4593-B043-5736C5A951DD}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B17E85B1-5F60-4440-9F9A-3DDE877E8CDF}
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,22 @@
+[
+    {
+        "Author": "Miragium",
+        "Name": "Body Flux",
+        "InternalName": "BodyFlux",
+        "AssemblyVersion": "0.5.1.2",
+        "Punchline": "Progressively morphs your character's body via Customize+ bone scaling.",
+        "Description": "Animates Customize+ bone scales from your current profile values toward a configurable target. Use /bodyflux to open the control window.",
+        "ApplicableVersion": "any",
+        "DalamudApiLevel": 15,
+        "Tags": [
+            "appearance",
+            "customize",
+            "character"
+        ],
+        "RepoUrl": "https://github.com/miragiumxiv/BodyFlux",
+        "IconUrl": "https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/BodyFlux/images/icon.png",
+        "DownloadLinkInstall": "https://github.com/miragiumxiv/BodyFlux/releases/download/0.5.1.2/BodyFlux.zip",
+        "DownloadLinkUpdate": "https://github.com/miragiumxiv/BodyFlux/releases/download/0.5.1.2/BodyFlux.zip",
+        "DownloadLinkTesting": "https://github.com/miragiumxiv/BodyFlux/releases/download/0.5.1.2/BodyFlux.zip"
+    }
+]
