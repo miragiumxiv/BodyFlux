@@ -117,14 +117,10 @@ public sealed class Plugin : IDalamudPlugin
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
-        // Stamp the running plugin version into the saved config (for visibility/debugging in the
-        // pluginConfigs JSON). Only rewrites the file when the version actually changed.
-        var version = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "";
-        if (Configuration.PluginVersion != version)
-        {
-            Configuration.PluginVersion = version;
+        // Apply pending schema migrations (e.g. retired relay URLs) before anything reads the config,
+        // and persist once if anything changed.
+        if (Configuration.Migrate())
             Configuration.Save();
-        }
 
         Ipc   = new CustomizePlusIpc(PluginInterface, Log);
         Brio  = new BrioIpc(PluginInterface, Log);

@@ -11,11 +11,8 @@ public class Configuration : IPluginConfiguration
     // Config schema version (IPluginConfiguration), used for migrations — NOT the plugin version.
     public int Version { get; set; } = 0;
 
-    /// <summary>
-    /// The plugin assembly version that last wrote this config, recorded for visibility/debugging.
-    /// Set automatically on startup from the running assembly (see Plugin constructor).
-    /// </summary>
-    public string PluginVersion { get; set; } = "";
+    /// <summary>Latest schema version. Bump when adding a migration step in <see cref="Migrate"/>.</summary>
+    public const int CurrentVersion = 1;
 
     /// <summary>Number of quick-access preset slots per set (Player and Brio).</summary>
     public const int PresetSlots = 20;
@@ -50,9 +47,45 @@ public class Configuration : IPluginConfiguration
     // frame to all peers in the same group code.  Peers who also have BodyFlux
     // installed will receive the frames and apply SetTemporaryProfileOnCharacter
     // to your character slot locally, giving them smooth real-time animation.
+    /// <summary>Current relay endpoint. Also the value retired URLs are migrated to (see <see cref="Migrate"/>).</summary>
+    public const string DefaultRelayUrl = "wss://bodyfluxsync.onrender.com";
+
+    // Relay URLs from earlier builds that no longer point anywhere. A config still on one of these
+    // (i.e. the user never set a custom URL) is repointed to DefaultRelayUrl on load.
+    private static readonly string[] DeadRelayUrls =
+    [
+        "wss://bodyfluxrelay.onrender.com",
+    ];
+
     public bool   NetworkSyncEnabled { get; set; } = false;
-    public string RelayUrl           { get; set; } = "wss://bodyfluxrelay.onrender.com";
+    public string RelayUrl           { get; set; } = DefaultRelayUrl;
     public string PairKey            { get; set; } = "";
+
+    /// <summary>
+    /// Applies one-time, version-gated migrations to a freshly loaded config and returns true if
+    /// anything changed (so the caller can persist once). Safe to run on every startup — each step
+    /// is gated on <see cref="Version"/>, and the relay-URL rewrite only touches retired defaults,
+    /// never a URL the user set themselves.
+    /// </summary>
+    public bool Migrate()
+    {
+        var changed = false;
+
+        // v1: the relay moved hosts. Repoint configs still on a retired default URL.
+        if (Version < 1 && Array.IndexOf(DeadRelayUrls, RelayUrl?.TrimEnd('/')) >= 0)
+        {
+            RelayUrl = DefaultRelayUrl;
+            changed  = true;
+        }
+
+        if (Version != CurrentVersion)
+        {
+            Version = CurrentVersion;
+            changed = true;
+        }
+
+        return changed;
+    }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
