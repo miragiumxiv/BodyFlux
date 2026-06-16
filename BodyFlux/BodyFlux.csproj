@@ -1,7 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.5.1.2</Version>
+    <Version>0.5.2.0</Version>
     <PackageProjectUrl>https://github.com/miragiumxiv/BodyFlux</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
@@ -9,6 +9,12 @@
   <ItemGroup>
     <Content Include="images\icon.png" />
   </ItemGroup>
+
+  <!-- DalamudPackager always emits latest.zip; rename it after the plugin for the GitHub release asset. -->
+  <Target Name="RenamePluginZip" AfterTargets="DefaultDalamudPackagerRelease">
+    <Move SourceFiles="$(OutputPath)$(AssemblyName)\latest.zip"
+          DestinationFiles="$(OutputPath)$(AssemblyName)\$(AssemblyName).zip" />
+  </Target>
   <ItemGroup>
     <!-- MCDF files are LZ4-legacy compressed; needed to read the embedded Customize+ origin. -->
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
