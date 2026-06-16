@@ -25,16 +25,16 @@ namespace BodyFlux.Network;
 public sealed class NetworkSync : IDisposable
 {
     // ── Inbound frame from a peer ─────────────────────────────────────────────
-    /// <param name="SenderName">Character name of the player who sent this frame.</param>
+    /// <param name="SenderId">Opaque peer id (salted hash) of the player who sent this frame.</param>
     /// <param name="ProfileJson">
     ///   Working-profile JSON to apply via SetTemporaryProfileOnCharacter,
     ///   or <see cref="string.Empty"/> as a "stop / delete temp profile" signal.
     /// </param>
-    /// <param name="Target">
-    ///   When non-null the frame is a targeted morph directed at a specific player.
+    /// <param name="TargetId">
+    ///   When non-null the frame is a targeted morph directed at a specific player (by peer id).
     ///   Null means the sender is morphing themselves.
     /// </param>
-    public readonly record struct PeerFrame(string SenderName, string ProfileJson, string? Target);
+    public readonly record struct PeerFrame(string SenderId, string ProfileJson, string? TargetId);
 
     // ── State ─────────────────────────────────────────────────────────────────
     private volatile string _status = "Connecting…";
@@ -51,8 +51,9 @@ public sealed class NetworkSync : IDisposable
     private readonly ConcurrentDictionary<string, DateTime> _peers = new();
 
     /// <summary>
-    /// Live map of peer character names → UTC timestamp of their last received message.
-    /// Entries older than ~90 s should be considered gone (missed 3 heartbeats).
+    /// Live map of peer ids → UTC timestamp of their last received message. Keyed by the opaque
+    /// <see cref="PeerIdentity"/> hash, never a real name. Entries older than ~90 s should be
+    /// considered gone (missed 3 heartbeats).
     /// </summary>
     public IReadOnlyDictionary<string, DateTime> Peers => _peers;
 
@@ -60,7 +61,7 @@ public sealed class NetworkSync : IDisposable
     private readonly ConcurrentDictionary<string, bool> _peerConsent = new();
 
     /// <summary>
-    /// Map of peer character names → whether they have enabled "allow remote morph".
+    /// Map of peer ids → whether they have enabled "allow remote morph".
     /// Updated whenever a hello or heartbeat is received from that peer.
     /// </summary>
     public IReadOnlyDictionary<string, bool> PeerConsent => _peerConsent;
@@ -72,10 +73,13 @@ public sealed class NetworkSync : IDisposable
     // "their scaling is unreadable because Lightless applied it as a temp profile" problem.
     private readonly ConcurrentDictionary<string, string> _peerBaseProfile = new();
 
-    /// <summary>Returns the base Customize+ profile JSON a peer broadcast, or null if not received yet.</summary>
+    /// <summary>
+    /// Returns the base Customize+ profile JSON a peer broadcast, or null if not received yet.
+    /// Takes the peer's real (local) name and hashes it to the peer id used as the storage key.
+    /// </summary>
     public bool TryGetPeerBaseProfile(string peerName, out string? json)
     {
-        var ok = _peerBaseProfile.TryGetValue(peerName, out var j);
+        var ok = _peerBaseProfile.TryGetValue(PeerIdentity.Of(peerName, _groupCode), out var j);
         json = j;
         return ok;
     }
@@ -104,10 +108,13 @@ public sealed class NetworkSync : IDisposable
     public bool MorphActive { get; set; }
 
     // ── Config ────────────────────────────────────────────────────────────────
-    private readonly string     _localName;
+    private readonly string     _localId;
     private readonly string     _groupCode;
     private readonly string     _relayBase;
     private readonly IPluginLog _log;
+
+    /// <summary>This client's own opaque peer id (salted hash of the local name). Never a real name.</summary>
+    public string LocalId => _localId;
 
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _runTask;
@@ -115,10 +122,13 @@ public sealed class NetworkSync : IDisposable
     // ── Constructor ───────────────────────────────────────────────────────────
     public NetworkSync(string localName, string groupCode, string relayUrl, IPluginLog log)
     {
-        _localName = localName;
         _groupCode = groupCode.Trim();
         _relayBase = relayUrl.TrimEnd('/');
         _log       = log;
+
+        // The real character name never leaves this process: it is hashed (salted with the Sync
+        // Key) into an opaque id, and only the id is ever put on the wire.
+        _localId   = PeerIdentity.Of(localName, _groupCode);
 
         _runTask = Task.Run(RunLoopAsync);
     }
@@ -209,14 +219,21 @@ public sealed class NetworkSync : IDisposable
             {
                 var raw     = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
                 var msg     = JObject.Parse(raw);
-                var sender  = msg["sender"]? .Value<string>();
+                var sender  = msg["sender"]? .Value<string>();  // opaque peer id, not a name
                 var type    = msg["type"]?.   Value<string>();
                 var profile = msg["profile"]?.Value<string>();
-                var target  = msg["target"]?. Value<string>();
+                var target  = msg["target"]?. Value<string>();  // opaque peer id, not a name
                 var consent = msg["consent"]?.Value<bool?>();
                 var baseP   = msg["base"]?.   Value<string>();
 
-                if (sender == null || sender == _localName) continue;
+                if (sender == null || sender == _localId) continue;
+
+                // Unpack DEFLATE+base64 profile payloads back into JSON (see ProfileWire).
+                if (msg["enc"]?.Value<string>() == "d")
+                {
+                    if (!string.IsNullOrEmpty(profile)) profile = ProfileWire.Unpack(profile);
+                    if (!string.IsNullOrEmpty(baseP))   baseP   = ProfileWire.Unpack(baseP);
+                }
 
                 // Update peer presence, consent, and base scaling for every message received
                 _peers[sender] = DateTime.UtcNow;
@@ -290,12 +307,19 @@ public sealed class NetworkSync : IDisposable
 
     private string BuildMessage(string type, string? profile, string? target = null)
     {
-        var obj = new JObject { ["sender"] = _localName, ["type"] = type, ["consent"] = LocalConsent };
-        if (profile != null) obj["profile"] = profile;
-        if (target  != null) obj["target"]  = target;
+        var obj = new JObject { ["sender"] = _localId, ["type"] = type, ["consent"] = LocalConsent };
+        // Profile payloads are stripped to {ID,Name,Bones} and DEFLATE+base64-packed; "enc" marks
+        // the packed fields so the receiver knows to unpack them. See ProfileWire.
+        if (profile != null) { obj["profile"] = ProfileWire.Pack(ProfileWire.Minimize(profile)); obj["enc"] = "d"; }
+        // The target is supplied as a real (local) character name; hash it so only the opaque id
+        // crosses the relay, mirroring how the sender id is derived.
+        if (target  != null) obj["target"]  = PeerIdentity.Of(target, _groupCode);
         // Attach our base scaling only on hello — frames already carry their own profile.
         if (type == "hello" && !string.IsNullOrEmpty(LocalBaseProfile))
-            obj["base"] = LocalBaseProfile;
+        {
+            obj["base"] = ProfileWire.Pack(ProfileWire.Minimize(LocalBaseProfile!));
+            obj["enc"]  = "d";
+        }
         return obj.ToString(Formatting.None);
     }
 

@@ -69,29 +69,54 @@ public sealed class SyncManager : IDisposable
         }
     }
 
-    public IReadOnlyDictionary<string, DateTime>? Peers => _net?.Peers;
+    /// <summary>
+    /// Presence list for the UI, keyed by a display label: the peer's real name when we can resolve
+    /// their id against a nearby character, otherwise a short form of the opaque id (distant peers
+    /// stay anonymous). Built fresh from the raw id-keyed map on each access.
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTime>? Peers
+    {
+        get
+        {
+            if (_net == null) return null;
+            var names  = BuildIdToNameMap();
+            var result = new Dictionary<string, DateTime>();
+            foreach (var kv in _net.Peers)
+                result[names.GetValueOrDefault(kv.Key) ?? PeerIdentity.Short(kv.Key)] = kv.Value;
+            return result;
+        }
+    }
 
-    /// <summary>Names of connected peers who allow remote morphing and were seen within ~90 s.</summary>
+    /// <summary>
+    /// Real names of connected peers who allow remote morphing and were seen within ~90 s. Only
+    /// peers we can resolve to a nearby character are returned — which is exactly the set we are
+    /// able to morph anyway (a far, unresolvable peer cannot be targeted).
+    /// </summary>
     public IReadOnlyList<string> ConsentingPeers
     {
         get
         {
             if (_net == null) return [];
             var cutoff = DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
+            var names  = BuildIdToNameMap();
             var list   = new List<string>();
             foreach (var kv in _net.PeerConsent)
-                if (kv.Value && _net.Peers.TryGetValue(kv.Key, out var seen) && seen >= cutoff)
-                    list.Add(kv.Key);
+                if (kv.Value && _net.Peers.TryGetValue(kv.Key, out var seen) && seen >= cutoff
+                    && names.TryGetValue(kv.Key, out var name))
+                    list.Add(name);
             return list;
         }
     }
 
     /// <summary>True when <paramref name="name"/> is a peer who consents and is currently present.</summary>
     public bool IsConsentingPeer(string name)
-        => _net != null
-        && _net.PeerConsent.TryGetValue(name, out bool consent) && consent
-        && _net.Peers.TryGetValue(name, out var seen)
-        && seen >= DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
+    {
+        if (_net == null) return false;
+        var id = PeerIdentity.Of(name, _config.PairKey);
+        return _net.PeerConsent.TryGetValue(id, out bool consent) && consent
+            && _net.Peers.TryGetValue(id, out var seen)
+            && seen >= DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
+    }
 
     /// <summary>Returns the base scaling JSON a peer broadcast, or null if not received yet.</summary>
     public bool TryGetPeerBaseProfile(string name, out string? json)
@@ -240,7 +265,7 @@ public sealed class SyncManager : IDisposable
         while (_net.TryDequeue(out var frame))
         {
             // ── Frames directed at the local player ───────────────────────────
-            if (frame.Target == LocalPlayerName)
+            if (frame.TargetId == _net.LocalId)
             {
                 // A stop (empty profile) only ever REMOVES the external temp profile, so always
                 // honor it — even after we've disabled remote morphing — otherwise a lingering
@@ -255,13 +280,14 @@ public sealed class SyncManager : IDisposable
 
             // ── Self-morph or targeted-at-someone-else: apply to their slot ───
             // For targeted frames, affect the named target; for self-morphs, affect the sender.
-            string characterName = !string.IsNullOrEmpty(frame.Target) ? frame.Target : frame.SenderName;
+            // These are opaque peer ids; we resolve them to a local ObjectTable slot by hashing.
+            string targetId = !string.IsNullOrEmpty(frame.TargetId) ? frame.TargetId! : frame.SenderId;
 
             // Only apply visually to characters that are confirmed members of our sync group.
             // This prevents accidentally morphing a same-named stranger in the local area.
-            if (!_net.Peers.ContainsKey(characterName)) continue;
+            if (!_net.Peers.ContainsKey(targetId)) continue;
 
-            var index = FindCharacterIndex(characterName);
+            var index = FindCharacterIndexById(targetId);
             if (index == null) continue;
 
             if (string.IsNullOrEmpty(frame.ProfileJson))
@@ -279,10 +305,10 @@ public sealed class SyncManager : IDisposable
     private bool HasLivePeers()
     {
         if (_net == null) return false;
-        var cutoff   = DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
-        var selfName = LocalPlayerName;
+        var cutoff = DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
+        var selfId = _net.LocalId;
         foreach (var kv in _net.Peers)
-            if (kv.Value >= cutoff && kv.Key != selfName)
+            if (kv.Value >= cutoff && kv.Key != selfId)
                 return true;
         return false;
     }
@@ -296,15 +322,38 @@ public sealed class SyncManager : IDisposable
         _lastPeerSeen = DateTime.MinValue;
     }
 
-    /// <summary>Returns the ObjectTable index of a character by name, or null if not visible.</summary>
-    private ushort? FindCharacterIndex(string characterName)
+    /// <summary>
+    /// Returns the ObjectTable index of the character whose name hashes to <paramref name="peerId"/>,
+    /// or null if no visible character matches (peer out of range). Resolves peer ids to local slots
+    /// without the real name ever having crossed the network.
+    /// </summary>
+    private ushort? FindCharacterIndexById(string peerId)
     {
+        var key = _config.PairKey;
         for (ushort i = 1; i < _objects.Length; i++)
         {
             var obj = _objects[i];
-            if (obj != null && obj.Name.TextValue == characterName)
+            if (obj != null && PeerIdentity.Of(obj.Name.TextValue, key) == peerId)
                 return i;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Builds a map of peer id → real name for every named character currently visible in the
+    /// ObjectTable. Used to resolve incoming ids back to names for display and target selection;
+    /// ids with no visible match simply stay unresolved (the peer is out of range).
+    /// </summary>
+    private Dictionary<string, string> BuildIdToNameMap()
+    {
+        var key = _config.PairKey;
+        var map = new Dictionary<string, string>();
+        for (ushort i = 0; i < _objects.Length; i++)
+        {
+            var name = _objects[i]?.Name.TextValue;
+            if (!string.IsNullOrEmpty(name))
+                map[PeerIdentity.Of(name, key)] = name;
+        }
+        return map;
     }
 }
