@@ -530,7 +530,8 @@ public sealed class PlayerTabView
 
         int playRequest = seqList.Draw(
             config.Sequences, ref _seqPlayingIndex, ref _seqAddFilter,
-            config.GrowthSpeed, busy, seqActive, playAllowed: true, null, bw, scale);
+            config.GrowthSpeed, busy, seqActive, playAllowed: true, null,
+            onReset: plugin.ResetGrowth, bw, scale);
 
         if (playRequest >= 0 && plugin.StartSequence(config.Sequences[playRequest]))
             _seqPlayingIndex = playRequest;

@@ -27,6 +27,7 @@ public sealed class SequenceListView
                     ref int playingIndex, ref string addFilter,
                     float defaultSpeed, bool busy, bool seqActive,
                     bool playAllowed, string? playBlockedTooltip,
+                    Action onReset,
                     float bw, float scale)
     {
         var config = plugin.Configuration;
@@ -58,7 +59,7 @@ public sealed class SequenceListView
             {
                 ImGui.Indent(12 * scale);
                 DrawEditor(seq, s, busy, seqActive, isPlaying, playAllowed, playBlockedTooltip,
-                           defaultSpeed, ref addFilter, bw, scale, ref deleteIdx, ref playRequest);
+                           defaultSpeed, onReset, ref addFilter, bw, scale, ref deleteIdx, ref playRequest);
                 ImGui.Unindent(12 * scale);
             }
 
@@ -80,7 +81,7 @@ public sealed class SequenceListView
     private void DrawEditor(MorphSequence seq, int seqIndex,
                             bool busy, bool seqActive, bool isPlaying,
                             bool playAllowed, string? playBlockedTooltip,
-                            float defaultSpeed, ref string addFilter,
+                            float defaultSpeed, Action onReset, ref string addFilter,
                             float bw, float scale, ref int deleteIdx, ref int playRequest)
     {
         var  config   = plugin.Configuration;
@@ -129,11 +130,12 @@ public sealed class SequenceListView
             // Speed + easing + remove on an indented second line so long names don't misalign.
             ImGui.Indent(28 * scale);
 
-            ImGui.SetNextItemWidth(110 * scale);
+            ImGui.SetNextItemWidth(170 * scale);
             float sp = step.Speed;
             using (ImRaii.Disabled(busy))
             {
-                if (ImGui.DragFloat("##spd", ref sp, 0.005f, 0.01f, 1f, "%.2f/s"))
+                // A labelled slider (not a drag field) so it's obvious this is the morph speed.
+                if (ImGui.SliderFloat("##spd", ref sp, 0.01f, 1f, "Speed: %.2f/s"))
                     seq.Steps[i] = step with { Speed = Math.Clamp(sp, 0.01f, 1f) };
                 if (ImGui.IsItemDeactivatedAfterEdit()) needSave = true;
             }
@@ -161,6 +163,10 @@ public sealed class SequenceListView
             ImGui.SameLine();
             using (ImRaii.Disabled(busy))
                 if (ImGui.Button("Remove")) removeIdx = i;
+
+            // Time to complete this step at its current speed (mirrors the Single tab).
+            float stepSecs = seq.Steps[i].Speed > 0f ? 1f / seq.Steps[i].Speed : float.PositiveInfinity;
+            ImGui.TextDisabled($"Time to complete: {stepSecs:F1}s");
 
             ImGui.Unindent(28 * scale);
             ImGui.PopID();
@@ -223,6 +229,14 @@ public sealed class SequenceListView
         if (!busy && !seqActive && !playAllowed && playBlockedTooltip != null
             && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(playBlockedTooltip);
+
+        // Reset the morph back to the character's original profile. Always available — it's also the
+        // way to stop a running sequence and clean up.
+        ImGui.SameLine();
+        if (ImGui.Button("Reset", new Vector2(bw, 0)))
+            onReset();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Reset to the original profile (also stops a running sequence).");
 
         ImGui.SameLine();
         using (ImRaii.Disabled(busy || isPlaying)) // can't delete the active sequence — Stop it first

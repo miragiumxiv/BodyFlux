@@ -445,10 +445,21 @@ public sealed class BrioTabView
         int playRequest = seqList.Draw(
             config.BrioSequences, ref dummyPlaying, ref _seqAddFilter,
             config.BrioGrowthSpeed, busy: false, seqActive: false,
-            playAllowed: actorSelected, "Select an actor in the Single tab first.", bw, scale);
+            playAllowed: actorSelected, "Select an actor in the Single tab first.",
+            onReset: ResetSequenceTarget, bw, scale);
 
         if (playRequest >= 0)
             plugin.StartBrioSequence(config.BrioSequences[playRequest]);
+    }
+
+    /// <summary>Reset target for a Brio sequence's Reset button: the selected actor, or all actors
+    /// if none is selected.</summary>
+    private void ResetSequenceTarget()
+    {
+        if (plugin.SelectedBrioActorIndex >= 0)
+            plugin.ResetBrioActor((ushort)plugin.SelectedBrioActorIndex);
+        else
+            plugin.ResetAllBrio();
     }
 
     private void DrawGroupSubTab()
@@ -637,6 +648,9 @@ public sealed class BrioTabView
         ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 60 * scale);
         float sp = g.Speed;
         if (ImGui.SliderFloat("Speed##grp", ref sp, 0.01f, 1f, "%.2f")) g.Speed = sp;
+
+        float grpSecs = g.Speed > 0f ? 1f / g.Speed : float.PositiveInfinity;
+        ImGui.TextDisabled($"Time to complete: {grpSecs:F1}s");
 
         // ── Mode ──────────────────────────────────────────────────────────────
         ImGui.TextUnformatted("Mode:");
