@@ -99,14 +99,6 @@ public sealed class NetworkSync : IDisposable
     /// </summary>
     public string? LocalBaseProfile { get; set; }
 
-    // ── Morph-activity gate ───────────────────────────────────────────────────
-    /// <summary>
-    /// Set by <see cref="SyncManager"/> while a morph frame is actively ticking.
-    /// The heartbeat is suppressed when false so no data is sent to the relay
-    /// while the local player is idle.
-    /// </summary>
-    public bool MorphActive { get; set; }
-
     // ── Config ────────────────────────────────────────────────────────────────
     private readonly string     _localId;
     private readonly string     _groupCode;
@@ -236,11 +228,18 @@ public sealed class NetworkSync : IDisposable
                 }
 
                 // Update peer presence, consent, and base scaling for every message received
+                bool isNewPeer = !_peers.ContainsKey(sender);
                 _peers[sender] = DateTime.UtcNow;
                 if (consent.HasValue)
                     _peerConsent[sender] = consent.Value;
                 if (!string.IsNullOrEmpty(baseP))
                     _peerBaseProfile[sender] = baseP;
+
+                // First time we hear from this peer — reply with a full hello so they (and we)
+                // discover each other and exchange base scaling immediately, instead of waiting for
+                // the next 30 s heartbeat. Bounded: we only reply on first sighting, never again.
+                if (isNewPeer)
+                    _outbound.Enqueue(BuildMessage("hello", null, includeBase: true));
 
                 if (type == "frame" && !string.IsNullOrEmpty(profile))
                     _inbound.Enqueue(new PeerFrame(sender, profile, target));
@@ -261,10 +260,10 @@ public sealed class NetworkSync : IDisposable
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(30_000, ct).ConfigureAwait(false);
-                // Only send the periodic hello when a morph is actively ticking.
-                // This suppresses heartbeat bandwidth while the local player is idle.
-                if (MorphActive)
-                    _outbound.Enqueue(BuildMessage("hello", null));
+                // Periodic presence heartbeat so peers keep seeing us in the group (and the
+                // lone-connection auto-disconnect can tell when the group is truly empty). Kept lean
+                // — no base profile; that is sent on connect, on change, and in new-peer replies.
+                _outbound.Enqueue(BuildMessage("hello", null, includeBase: false));
             }
         }
         catch (OperationCanceledException) { }
@@ -305,7 +304,7 @@ public sealed class NetworkSync : IDisposable
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private string BuildMessage(string type, string? profile, string? target = null)
+    private string BuildMessage(string type, string? profile, string? target = null, bool includeBase = true)
     {
         var obj = new JObject { ["sender"] = _localId, ["type"] = type, ["consent"] = LocalConsent };
         // Profile payloads are stripped to {ID,Name,Bones} and DEFLATE+base64-packed; "enc" marks
@@ -314,8 +313,9 @@ public sealed class NetworkSync : IDisposable
         // The target is supplied as a real (local) character name; hash it so only the opaque id
         // crosses the relay, mirroring how the sender id is derived.
         if (target  != null) obj["target"]  = PeerIdentity.Of(target, _groupCode);
-        // Attach our base scaling only on hello — frames already carry their own profile.
-        if (type == "hello" && !string.IsNullOrEmpty(LocalBaseProfile))
+        // Attach our base scaling only on hello, and only when asked — frames carry their own
+        // profile, and presence heartbeats stay lean (peers keep the base cached from earlier).
+        if (type == "hello" && includeBase && !string.IsNullOrEmpty(LocalBaseProfile))
         {
             obj["base"] = ProfileWire.Pack(ProfileWire.Minimize(LocalBaseProfile!));
             obj["enc"]  = "d";

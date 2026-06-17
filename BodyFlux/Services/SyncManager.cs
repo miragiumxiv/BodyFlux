@@ -221,10 +221,6 @@ public sealed class SyncManager : IDisposable
         if (_net == null) return;
         if (string.IsNullOrWhiteSpace(_config.PairKey)) return;
 
-        // Signal to NetworkSync that a morph is active (enables heartbeat). Note: morph activity does
-        // NOT touch the auto-disconnect timer — that tracks peer presence only (see _lastPeerSeen).
-        _net.MorphActive   = true;
-
         _sendTimer += seconds;
         if (_sendTimer < SendInterval && progress < 1f) return;
         _sendTimer = 0f;
@@ -235,11 +231,7 @@ public sealed class SyncManager : IDisposable
     public void SendFrame(string json, string? target) => _net?.SendFrame(json, target);
 
     /// <summary>Tells peers to stop/clear the morph on the given target (or self when null).</summary>
-    public void SendStop(string? target = null)
-    {
-        _net?.SendStop(target);
-        if (_net != null) _net.MorphActive = false;
-    }
+    public void SendStop(string? target = null) => _net?.SendStop(target);
 
     // ── Inbound frames (called once per framework tick) ───────────────────────
 

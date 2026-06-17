@@ -143,6 +143,8 @@ public sealed class SyncTabView
             if (!string.IsNullOrEmpty(localName))
                 ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.6f, 1f), $"  {localName} (you)");
 
+            // peers is keyed by display label (real name for nearby peers, short opaque id for
+            // distant ones — names never cross the relay). Show everyone seen within the stale window.
             var  cutoff  = DateTime.UtcNow.AddSeconds(-90);
             bool anyPeer = false;
             foreach (var kv in peers)
