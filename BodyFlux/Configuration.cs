@@ -1,6 +1,7 @@
 using Dalamud.Configuration;
 using System;
 using System.Collections.Generic;
+using BodyFlux.Input;
 using BodyFlux.Morph;
 
 namespace BodyFlux;
@@ -41,6 +42,34 @@ public class Configuration : IPluginConfiguration
 
     // When true, connected peers are allowed to apply morph profiles to this character.
     public bool AllowRemoteMorph { get; set; } = false;
+
+    // ── Keybinds ─────────────────────────────────────────────────────────────
+    // Master switch: when false, no keybind fires regardless of its binding.
+    public bool KeybindsEnabled { get; set; } = true;
+
+    // Hotkey per morph operation. Each is context-sensitive when fired: outside GPose it controls
+    // the player's morph, inside GPose it controls all Brio actors. All start unbound.
+    public Dictionary<MorphAction, Keybind> Keybinds { get; set; } = new();
+
+    // Hotkey per preset slot (0-based, < PresetSlots). Context-sensitive: applies the matching
+    // player preset outside GPose, or the matching Brio preset inside GPose.
+    public Dictionary<int, Keybind> PresetKeybinds { get; set; } = new();
+
+    /// <summary>Returns the keybind for an action, creating an unbound entry if none exists.</summary>
+    public Keybind GetKeybind(MorphAction action)
+    {
+        if (!Keybinds.TryGetValue(action, out var bind))
+            Keybinds[action] = bind = new Keybind();
+        return bind;
+    }
+
+    /// <summary>Returns the keybind for a preset slot, creating an unbound entry if none exists.</summary>
+    public Keybind GetPresetKeybind(int slot)
+    {
+        if (!PresetKeybinds.TryGetValue(slot, out var bind))
+            PresetKeybinds[slot] = bind = new Keybind();
+        return bind;
+    }
 
     // ── Network sync (peer sharing via BodyFluxRelay) ────────────────────────
     // When enabled, the plugin connects to the relay and broadcasts each morph

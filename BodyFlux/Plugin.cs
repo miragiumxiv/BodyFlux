@@ -4,6 +4,7 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using BodyFlux.Input;
 using BodyFlux.Ipc;
 using BodyFlux.Io;
 using BodyFlux.Morph;
@@ -27,12 +28,14 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable           ObjectTable     { get; private set; } = null!;
     [PluginService] internal static IChatGui               ChatGui         { get; private set; } = null!;
     [PluginService] internal static IClientState           ClientState     { get; private set; } = null!;
+    [PluginService] internal static IKeyState              KeyState        { get; private set; } = null!;
 
     // ── Core services ─────────────────────────────────────────────────────────
     internal CustomizePlusIpc Ipc   { get; private init; }
     internal BrioIpc          Brio  { get; private init; }
     internal SyncManager      Sync  { get; private init; }
     internal MorphEngine      Morph { get; private init; }
+    internal KeybindHandler   Keybinds { get; private init; }
     private  ChatCommands     _chatCommands = null!;
 
     // ── Configuration & UI ────────────────────────────────────────────────────
@@ -126,6 +129,7 @@ public sealed class Plugin : IDalamudPlugin
         Brio  = new BrioIpc(PluginInterface, Log);
         Sync  = new SyncManager(Ipc, ObjectTable, Log, Configuration);
         Morph = new MorphEngine(Ipc, Brio, Sync, ObjectTable, ClientState, Configuration, ChatGui, Log);
+        Keybinds = new KeybindHandler(this, KeyState);
 
         Ipc.ProfileUpdated += OnLocalProfileUpdated;
 
@@ -197,6 +201,10 @@ public sealed class Plugin : IDalamudPlugin
 
         Sync.ProcessIncomingFrames();
         Morph.Tick((float)framework.UpdateDelta.TotalSeconds);
+
+        // Poll hotkeys only while logged in (no point reading keys at title/character select).
+        if (loggedIn)
+            Keybinds.Tick();
     }
 
     // ── Network sync facade ───────────────────────────────────────────────────

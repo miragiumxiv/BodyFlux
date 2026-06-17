@@ -538,15 +538,7 @@ public sealed class BrioTabView
         using (ImRaii.Disabled(applyable == 0))
         {
             if (ImGui.Button($"Apply All ({applyable})", new Vector2(bw + 40 * scale, 0)))
-            {
-                foreach (var g in _group)
-                {
-                    if (g.DestIndex < 0 || g.DestIndex >= plugin.SavedProfiles.Count) continue;
-                    if (!actors.Exists(a => a.Index == g.ActorIndex)) continue; // gone from scene
-                    var destId = plugin.SavedProfiles[g.DestIndex].Id;
-                    plugin.StartBrioMorphFor(g.ActorIndex, destId, g.OriginMcdfJson, g.Speed, g.Mode, g.Easing);
-                }
-            }
+                ApplyGroup();
         }
 
         ImGui.Spacing();
@@ -557,6 +549,22 @@ public sealed class BrioTabView
         if (ImGui.Button("Reverse All", new Vector2(bw, 0))) plugin.ReverseAllBrio();
         ImGui.SameLine();
         if (ImGui.Button("Reset All",   new Vector2(bw, 0))) plugin.ResetAllBrio();
+    }
+
+    /// <summary>
+    /// Morphs every configured group entry at once (the Multi tab's "Apply All"). Skips entries with
+    /// no destination or whose actor has left the scene. Also invoked by the "Apply Multi" keybind.
+    /// </summary>
+    public void ApplyGroup()
+    {
+        var actors = plugin.GetGPoseActors();
+        foreach (var g in _group)
+        {
+            if (g.DestIndex < 0 || g.DestIndex >= plugin.SavedProfiles.Count) continue;
+            if (!actors.Exists(a => a.Index == g.ActorIndex)) continue; // gone from scene
+            var destId = plugin.SavedProfiles[g.DestIndex].Id;
+            plugin.StartBrioMorphFor(g.ActorIndex, destId, g.OriginMcdfJson, g.Speed, g.Mode, g.Easing);
+        }
     }
 
     /// <summary>Draws the config editor for one group entry (destination, MCDF, speed, mode, easing).</summary>

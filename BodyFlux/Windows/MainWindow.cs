@@ -25,6 +25,7 @@ public class MainWindow : Window, IDisposable
     private readonly Tabs.SequenceListView _seqList;
     private readonly Tabs.PlayerTabView    _playerTab;
     private readonly Tabs.BrioTabView      _brioTab;
+    private readonly Tabs.KeybindsTabView  _keybindsTab;
 
     public MainWindow(Plugin plugin)
         : base("Body Flux##BodyFluxMain", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -42,6 +43,11 @@ public class MainWindow : Window, IDisposable
         _seqList   = new Tabs.SequenceListView(plugin);
         _playerTab = new Tabs.PlayerTabView(plugin, _seqList, () => _refreshedOnOpen = false);
         _brioTab   = new Tabs.BrioTabView(plugin, _seqList, _fileDialog);
+        _keybindsTab = new Tabs.KeybindsTabView(plugin);
+
+        // The Multi "Apply All" config lives in the Brio tab view, so let the keybind handler
+        // trigger it through here.
+        plugin.Keybinds.ApplyMultiHandler = _brioTab.ApplyGroup;
     }
 
     public void Dispose() { }
@@ -111,9 +117,13 @@ public class MainWindow : Window, IDisposable
         // the RAII wrapper always calls EndDisabled() even when disabled=false, which
         // unbalances the ImGui disabled stack and keeps the tab grey while in GPose.
         if (!inGpose) ImGui.BeginDisabled();
-        using (var tab = ImRaii.TabItem("Brio"))
+        using (var tab = ImRaii.TabItem("Gpose"))
             if (tab) _brioTab.Draw();
         if (!inGpose) ImGui.EndDisabled();
+
+        // Keybinds tab — configure hotkeys for the morph operations.
+        using (var tab = ImRaii.TabItem("Keybinds"))
+            if (tab) _keybindsTab.Draw();
 
         // Render any open file dialog (MCDF origin picker) on top of the window.
         _fileDialog.Draw();
