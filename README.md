@@ -89,6 +89,14 @@ Add the custom plugin repository in Dalamud (`/xlsettings` → **Experimental** 
 https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/pluginmaster.json
 ```
 
+## Support
+
+BodyFlux is **open source and completely free for everyone** — and it always will be. No feature will ever be locked behind a paywall.
+
+If you enjoy the plugin and would like to support its development, you can buy me a coffee on Ko-fi. It's entirely optional and hugely appreciated. ❤️
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/M4M21EP0Y4)
+
 ## Credits
 
 Plugin icon designed by **BubblySugars** — [@BubblySugars](https://x.com/BubblySugars).

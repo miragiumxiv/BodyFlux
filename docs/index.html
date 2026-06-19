@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BodyFlux — FFXIV Dalamud Plugin</title>
+<meta name="description" content="A Dalamud plugin for FINAL FANTASY XIV that smoothly animates your character's body between Customize+ profiles — in the world, in GPose, and synced with your partners in real time." />
+
+<!-- Social / Open Graph preview -->
+<meta property="og:title" content="BodyFlux — FFXIV Dalamud Plugin" />
+<meta property="og:description" content="Smoothly animate your character's body between Customize+ profiles — in the world, in GPose, and synced with partners in real time." />
+<meta property="og:image" content="https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/BodyFlux/images/icon.png" />
+<meta property="og:type" content="website" />
+
+<link rel="icon" href="https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/BodyFlux/images/icon.png" />
+
+<style>
+  :root {
+    --bg:        #0e0c14;
+    --bg-soft:   #16131f;
+    --card:      #1c1827;
+    --border:    #2c2640;
+    --text:      #e8e4f0;
+    --muted:     #a59cba;
+    --accent:    #b388ff;
+    --accent-2:  #ff6200; /* Ko-fi orange */
+    --green:     #5ee08a;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #241c38 0%, transparent 60%),
+      var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── Hero ─────────────────────────────────────────────── */
+  header.hero {
+    text-align: center;
+    padding: 72px 24px 48px;
+  }
+  header.hero img.icon {
+    width: 150px; height: 150px;
+    border-radius: 28px;
+    box-shadow: 0 10px 40px rgba(179,136,255,0.3);
+  }
+  header.hero h1 {
+    font-size: 3rem;
+    margin: 20px 0 6px;
+    letter-spacing: -0.5px;
+    background: linear-gradient(90deg, #d7c2ff, #b388ff 60%, #8f6bff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header.hero p.tagline {
+    color: var(--muted);
+    font-size: 1.15rem;
+    max-width: 640px;
+    margin: 0 auto 26px;
+  }
+
+  .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 26px; }
+  .badges img { height: 22px; }
+
+  .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 24px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 1rem;
+    border: 1px solid transparent;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn:hover { transform: translateY(-2px); text-decoration: none; }
+  .btn-primary { background: linear-gradient(90deg, #8f6bff, #b388ff); color: #160f24; box-shadow: 0 6px 20px rgba(143,107,255,0.35); }
+  .btn-ghost   { background: var(--card); color: var(--text); border-color: var(--border); }
+  .btn-kofi    { background: var(--accent-2); color: #fff; box-shadow: 0 6px 20px rgba(255,98,0,0.35); }
+
+  /* ── Sections ─────────────────────────────────────────── */
+  section { padding: 40px 0; border-top: 1px solid var(--border); }
+  section h2 {
+    font-size: 1.7rem;
+    margin: 0 0 18px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section h2::before {
+    content: ""; width: 6px; height: 26px; border-radius: 4px;
+    background: linear-gradient(var(--accent), #8f6bff);
+  }
+
+  .lead { color: var(--muted); font-size: 1.05rem; }
+
+  /* ── Feature grid ─────────────────────────────────────── */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .feature {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .feature h3 { margin: 0 0 8px; font-size: 1.1rem; color: #d7c2ff; }
+  .feature p  { margin: 0; color: var(--muted); font-size: 0.95rem; }
+
+  /* ── Requirements ─────────────────────────────────────── */
+  .req { display: flex; flex-direction: column; gap: 12px; }
+  .req .item {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  }
+  .tag { font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .tag.required { background: rgba(255,98,0,0.18); color: #ff9a55; }
+  .tag.optional { background: rgba(94,224,138,0.16); color: var(--green); }
+
+  /* ── Code / install ───────────────────────────────────── */
+  pre {
+    background: #100d18; border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; overflow-x: auto;
+    color: #cde6ff; font-size: 0.92rem;
+  }
+  code { font-family: "Cascadia Code", "Consolas", monospace; }
+
+  table.cmds { width: 100%; border-collapse: collapse; }
+  table.cmds td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.cmds td.cmd { white-space: nowrap; }
+  table.cmds code { color: var(--accent); }
+
+  /* ── Support ──────────────────────────────────────────── */
+  .support-box {
+    background: linear-gradient(135deg, rgba(255,98,0,0.10), rgba(179,136,255,0.08));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    text-align: center;
+  }
+  .support-box p { color: var(--muted); max-width: 620px; margin: 0 auto 18px; }
+  .kofi-cup { height: 20px; vertical-align: middle; animation: kofi-wobble 3s infinite; transform-origin: 50% 80%; }
+  @keyframes kofi-wobble {
+    0%, 84%, 100% { transform: rotate(0); }
+    88% { transform: rotate(-9deg); }
+    92% { transform: rotate(9deg); }
+    96% { transform: rotate(-4deg); }
+  }
+
+  footer { text-align: center; padding: 40px 24px 60px; color: var(--muted); font-size: 0.9rem; }
+  footer a { color: var(--accent); }
+
+  @media (max-width: 560px) {
+    header.hero h1 { font-size: 2.2rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Hero ─────────────────────────────────────────────── -->
+<header class="hero">
+  <img class="icon" src="https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/BodyFlux/images/icon.png" alt="BodyFlux icon" />
+  <h1>BodyFlux</h1>
+  <p class="tagline">
+    A Dalamud plugin for FINAL FANTASY XIV that smoothly animates your character's body
+    between Customize+ profiles — in the world, in GPose, and synced with your partners in real time.
+  </p>
+
+  <div class="badges">
+    <a href="https://github.com/miragiumxiv/BodyFlux/releases/latest"><img src="https://img.shields.io/github/v/release/miragiumxiv/BodyFlux?label=release&color=blueviolet" alt="Latest release" /></a>
+    <a href="https://github.com/miragiumxiv/BodyFlux/releases"><img src="https://img.shields.io/github/downloads/miragiumxiv/BodyFlux/total?label=downloads&color=green" alt="Downloads" /></a>
+    <a href="https://github.com/miragiumxiv/BodyFlux/blob/master/LICENSE.md"><img src="https://img.shields.io/github/license/miragiumxiv/BodyFlux?label=license&color=orange" alt="License" /></a>
+  </div>
+
+  <div class="cta">
+    <a class="btn btn-primary" href="https://github.com/miragiumxiv/BodyFlux/releases">⬇ Releases</a>
+    <a class="btn btn-ghost" href="https://github.com/miragiumxiv/BodyFlux">★ GitHub</a>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ── About ──────────────────────────────────────────── -->
+  <section id="about">
+    <h2>About</h2>
+    <p class="lead">
+      BodyFlux turns the static body scaling of
+      <a href="https://github.com/Aether-Tools/CustomizePlus">Customize+</a>
+      into a smooth, animated transition. Instead of snapping from one profile to another,
+      BodyFlux interpolates every bone — translation, rotation and scale — from your current
+      appearance toward a destination profile over a duration you control.
+    </p>
+    <p class="lead">
+      Morph your own character anywhere in the world, drive multiple GPose actors at once through
+      <a href="https://github.com/Etheirys/Brio">Brio</a>, chain several profiles into automatic
+      A→B→C sequences, save your favourite configurations as presets, and trigger everything from
+      chat commands or custom hotkeys. With Group Sync enabled, paired players see each other's
+      morphs animate live, and can even morph each other's characters with consent.
+    </p>
+  </section>
+
+  <!-- ── Features ───────────────────────────────────────── -->
+  <section id="features">
+    <h2>Features</h2>
+    <div class="features">
+      <div class="feature">
+        <h3>Profile Morphing</h3>
+        <p>Smoothly interpolate every bone (translation, rotation, scale) from your active profile to any destination, with a live progress bar, bone count, and Pause / Resume / Reverse / Reset.</p>
+      </div>
+      <div class="feature">
+        <h3>Modes &amp; Easing</h3>
+        <p>Simple, Loop (Single) and Loop (Infinite) modes, plus Linear, Ease In, Ease Out and Ease In-Out curves, with a configurable Growth Speed and time-to-complete readout.</p>
+      </div>
+      <div class="feature">
+        <h3>Presets</h3>
+        <p>Save up to 20 morph configurations (profile, speed, mode, easing) for instant recall from the UI, from chat, or via a bound hotkey.</p>
+      </div>
+      <div class="feature">
+        <h3>Sequences</h3>
+        <p>Chain several morphs into an automatic A→B→C sequence — each step starts from the previous result with its own speed and easing.</p>
+      </div>
+      <div class="feature">
+        <h3>GPose / Brio</h3>
+        <p>Morph any GPose actor or Brio clone, several at once, with MCDF origin scaling, dedicated Brio presets &amp; sequences, and a Multi tab to Apply All at once.</p>
+      </div>
+      <div class="feature">
+        <h3>Group Sync</h3>
+        <p>Share a Sync Key to see each other's morphs animate live, with an opt-in consent toggle to let partners morph your character. Privacy-first — names never reach the relay.</p>
+      </div>
+      <div class="feature">
+        <h3>Keybinds</h3>
+        <p>Bind hotkeys for Apply, Apply Multi, Pause, Resume, Reset, Reverse and individual preset slots. Context-sensitive between the player and GPose actors.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Requirements ───────────────────────────────────── -->
+  <section id="requirements">
+    <h2>Requirements</h2>
+    <div class="req">
+      <div class="item">
+        <a href="https://github.com/Aether-Tools/CustomizePlus"><strong>Customize+</strong></a>
+        <span class="tag required">REQUIRED</span>
+        <span class="lead" style="flex:1 1 240px;">A Customize+ profile must be active on your character before morphing.</span>
+      </div>
+      <div class="item">
+        <a href="https://github.com/Etheirys/Brio"><strong>Brio</strong></a>
+        <span class="tag optional">OPTIONAL</span>
+        <span class="lead" style="flex:1 1 240px;">Only needed for morphing GPose actors / clones.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Chat Commands ──────────────────────────────────── -->
+  <section id="commands">
+    <h2>Chat Commands</h2>
+    <table class="cmds">
+      <tr><td class="cmd"><code>/bodyflux</code></td><td>Open / close the control window.</td></tr>
+      <tr><td class="cmd"><code>/bodyflux preset &lt;1-20&gt; [speed]</code></td><td>Apply a preset slot, optionally overriding the speed (0.01–1.0).</td></tr>
+      <tr><td class="cmd"><code>/bodyflux sequence &lt;name&gt; [speed]</code></td><td>Play a sequence by name, optionally overriding the speed.</td></tr>
+      <tr><td class="cmd"><code>/bodyflux pause</code></td><td>Pause the active morph.</td></tr>
+      <tr><td class="cmd"><code>/bodyflux resume</code></td><td>Resume a paused morph.</td></tr>
+      <tr><td class="cmd"><code>/bodyflux reverse</code></td><td>Reverse the active morph.</td></tr>
+      <tr><td class="cmd"><code>/bodyflux reset</code></td><td>Reset the active morph and restore the original profile.</td></tr>
+    </table>
+  </section>
+
+  <!-- ── Installation ───────────────────────────────────── -->
+  <section id="install">
+    <h2>Installation</h2>
+    <p class="lead">
+      Add the custom plugin repository in Dalamud (<code>/xlsettings</code> → <strong>Experimental</strong>
+      → <strong>Custom Plugin Repositories</strong>) using the URL below, then install
+      <strong>BodyFlux</strong> from the plugin installer:
+    </p>
+    <pre><code>https://raw.githubusercontent.com/miragiumxiv/BodyFlux/master/pluginmaster.json</code></pre>
+  </section>
+
+  <!-- ── Support ────────────────────────────────────────── -->
+  <section id="support">
+    <h2>Support</h2>
+    <div class="support-box">
+      <p>
+        BodyFlux is <strong>open source and completely free for everyone</strong> — and it always will be.
+        No feature will ever be locked behind a paywall.
+      </p>
+      <p>
+        If you enjoy the plugin and would like to support its development, you can buy me a coffee on Ko-fi.
+        It's entirely optional and hugely appreciated. 💜
+      </p>
+      <a class="btn btn-kofi" href="https://ko-fi.com/M4M21EP0Y4" target="_blank" rel="noopener">
+        <img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="" class="kofi-cup" /> Support me on Ko-fi
+      </a>
+    </div>
+  </section>
+
+  <!-- ── Credits ────────────────────────────────────────── -->
+  <section id="credits">
+    <h2>Credits</h2>
+    <p class="lead">
+      Plugin icon designed by <strong>BubblySugars</strong> —
+      <a href="https://x.com/BubblySugars" target="_blank" rel="noopener">@BubblySugars</a>.
+    </p>
+  </section>
+
+</div>
+
+<footer>
+  BodyFlux · A community plugin for FINAL FANTASY XIV ·
+  <a href="https://github.com/miragiumxiv/BodyFlux">View on GitHub</a><br />
+  Not affiliated with or endorsed by Square Enix.
+</footer>
+
+<!-- ── Ko-fi Floating Button (JavaScript widget) ──────────── -->
+<script src="https://storage.ko-fi.com/cdn/scripts/overlay-widget.js"></script>
+<script>
+  kofiWidgetOverlay.draw('M4M21EP0Y4', {
+    'type': 'floating-chat',
+    'floating-chat.donateButton.text': 'Support me',
+    'floating-chat.donateButton.background-color': '#ff6200',
+    'floating-chat.donateButton.text-color': '#fff'
+  });
+</script>
+
+</body>
+</html>
