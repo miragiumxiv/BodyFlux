@@ -24,7 +24,8 @@ public sealed class MorphController
     private readonly record struct BoneAnim(
         Vector3 StartTranslation, Vector3 EndTranslation,
         Vector3 StartRotation,    Vector3 EndRotation,
-        Vector3 StartScale,       Vector3 EndScale);
+        Vector3 StartScale,       Vector3 EndScale,
+        bool    LinkedScale);
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -124,7 +125,8 @@ public sealed class MorphController
             _boneAnims[bone] = new BoneAnim(
                 StartTranslation: startT, EndTranslation: destT,
                 StartRotation:    startR, EndRotation:    destR,
-                StartScale:       startS, EndScale:       destS);
+                StartScale:       startS, EndScale:       destS,
+                LinkedScale:      BoneJsonHelper.IsLinkedScale(originBones, destBones, bone));
         }
 
         // Initialise the working document: ensure all animated bones exist at their
@@ -137,8 +139,27 @@ public sealed class MorphController
         {
             // When externalising the root, never write it into the C+ profile — Brio owns it.
             if (_externaliseRoot && bone == RootBone) continue;
+
+            // Seed the working bone from the source entry so all C+ metadata (PropagateScale/
+            // Rotation/Translation, ChildScalingIndependent, etc.) is preserved; SetBoneTransform
+            // then only animates T/R/S on top via its existing-bone (WriteChannel) path.
+            // Endpoint choice: prefer the destination entry, fall back to origin. A linked flag
+            // (e.g. PropagateScale) is a boolean and can't be interpolated, so the morph ends in
+            // the destination's link state — the intuitive result when morphing *toward* a profile.
+            // Do not "simplify" this to origin-first.
+            var template = BoneJsonHelper.CloneBoneTemplate(originBones, destBones, bone);
+            if (template != null)
+                workBones[bone] = template;
+
             BoneJsonHelper.SetBoneTransform(workBones, bone,
                 anim.StartTranslation, anim.StartRotation, anim.StartScale);
+
+            // Linked ("propagate scale") parents need their child magnitude expressed explicitly —
+            // see SetLinkedChildScaling. At the origin (t=0) the extra child factor is 1 (children
+            // are already drawn at their own scale); it ramps toward the destination foot scale
+            // during the morph (mirrored in Tick).
+            if (anim.LinkedScale)
+                BoneJsonHelper.SetLinkedChildScaling(workBones, bone, Vector3.One);
         }
 
         // Seed the externalised root scale at its start value so the very first tick is correct.
@@ -268,10 +289,21 @@ public sealed class MorphController
                 continue;
             }
 
+            var scale = Vector3.Lerp(anim.StartScale, anim.EndScale, t);
             BoneJsonHelper.SetBoneTransform(workBones, bone,
                 translation: Vector3.Lerp(anim.StartTranslation, anim.EndTranslation, t),
                 rotation:    Vector3.Lerp(anim.StartRotation,    anim.EndRotation,    t),
-                scale:       Vector3.Lerp(anim.StartScale,       anim.EndScale,       t));
+                scale:       scale);
+
+            // Drive the linked parent's child propagation so its children (e.g. toes under a scaled
+            // foot) follow. ChildScaling is the *extra* factor applied on top of each child's own
+            // scale, so it must ramp from 1 (origin: children already shown at their own scale) to
+            // the destination foot scale — NOT track the foot's own scale, which would double up with
+            // a child that still carries a non-1 own scale at the start and cause a pop. See
+            // BoneJsonHelper.SetLinkedChildScaling.
+            if (anim.LinkedScale)
+                BoneJsonHelper.SetLinkedChildScaling(workBones, bone,
+                    Vector3.Lerp(Vector3.One, anim.EndScale, t));
         }
 
         return _workingProfile.ToString(Formatting.None);
