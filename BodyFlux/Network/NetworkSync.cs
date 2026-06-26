@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
@@ -84,6 +85,11 @@ public sealed class NetworkSync : IDisposable
         return ok;
     }
 
+    // ── Room config (received from server on connect) ─────────────────────────
+    /// <summary>Maximum peers allowed in this room, as reported by the server. Null until the
+    /// welcome message arrives.</summary>
+    public int? MaxPeers { get; private set; }
+
     // ── Local consent ─────────────────────────────────────────────────────────
     /// <summary>
     /// Whether this player allows others to morph their character.
@@ -103,6 +109,7 @@ public sealed class NetworkSync : IDisposable
     private readonly string     _localId;
     private readonly string     _groupCode;
     private readonly string     _relayBase;
+    private readonly string     _installIdParam; // "N" format (no hyphens), appended as ?iid=
     private readonly IPluginLog _log;
 
     /// <summary>This client's own opaque peer id (salted hash of the local name). Never a real name.</summary>
@@ -112,15 +119,16 @@ public sealed class NetworkSync : IDisposable
     private readonly Task _runTask;
 
     // ── Constructor ───────────────────────────────────────────────────────────
-    public NetworkSync(string localName, string groupCode, string relayUrl, IPluginLog log)
+    public NetworkSync(string localName, string groupCode, string relayUrl, Guid installId, IPluginLog log)
     {
-        _groupCode = groupCode.Trim();
-        _relayBase = relayUrl.TrimEnd('/');
-        _log       = log;
+        _groupCode      = groupCode.Trim();
+        _relayBase      = relayUrl.TrimEnd('/');
+        _installIdParam = installId.ToString("N"); // 32 hex chars, no hyphens
+        _log            = log;
 
         // The real character name never leaves this process: it is hashed (salted with the Sync
         // Key) into an opaque id, and only the id is ever put on the wire.
-        _localId   = PeerIdentity.Of(localName, _groupCode);
+        _localId = PeerIdentity.Of(localName, _groupCode);
 
         _runTask = Task.Run(RunLoopAsync);
     }
@@ -140,7 +148,7 @@ public sealed class NetworkSync : IDisposable
             try
             {
                 _status = "Connecting…";
-                var uri = new Uri($"{_relayBase}/ws/{Uri.EscapeDataString(_groupCode)}");
+                var uri = new Uri($"{_relayBase}/ws/{Uri.EscapeDataString(_groupCode)}?iid={_installIdParam}");
                 await ws.ConnectAsync(uri, _cts.Token).ConfigureAwait(false);
 
                 _connected = true;
@@ -218,6 +226,65 @@ public sealed class NetworkSync : IDisposable
                 var consent = msg["consent"]?.Value<bool?>();
                 var baseP   = msg["base"]?.   Value<string>();
 
+                // Server-originated messages (no "sender") — handle before the sender check.
+                if (type == "welcome")
+                {
+                    MaxPeers = msg["maxPeers"]?.Value<int?>();
+                    continue;
+                }
+
+                // Batch messages are sent by the server and carry no "sender" field — handle them
+                // before the sender check so they are not silently discarded.
+                if (type == "batch" && msg["peers"] is JObject batchPeers)
+                {
+                    var activePids = new HashSet<string>();
+
+                    foreach (var prop in batchPeers.Properties())
+                    {
+                        var pid  = prop.Name;
+                        if (pid == _localId) continue;
+                        if (prop.Value is not JObject pData) continue;
+
+                        activePids.Add(pid);
+
+                        var pProfile  = pData["profile"]?.Value<string>();
+                        var pConsent  = pData["consent"]?.Value<bool?>();
+                        var pBase     = pData["base"]?.   Value<string>();
+                        var pStop     = pData["stop"]?.   Value<bool?>() ?? false;
+
+                        if (pData["enc"]?.Value<string>() == "d")
+                        {
+                            if (!string.IsNullOrEmpty(pProfile)) pProfile = ProfileWire.Unpack(pProfile);
+                            if (!string.IsNullOrEmpty(pBase))    pBase    = ProfileWire.Unpack(pBase);
+                        }
+
+                        bool isNew = !_peers.ContainsKey(pid);
+                        _peers[pid] = DateTime.UtcNow;
+                        if (pConsent.HasValue)            _peerConsent[pid]     = pConsent.Value;
+                        if (!string.IsNullOrEmpty(pBase)) _peerBaseProfile[pid] = pBase;
+
+                        if (isNew) _outbound.Enqueue(BuildMessage("hello", null, includeBase: true));
+
+                        if (pStop)
+                            _inbound.Enqueue(new PeerFrame(pid, string.Empty, null));
+                        else if (!string.IsNullOrEmpty(pProfile))
+                            _inbound.Enqueue(new PeerFrame(pid, pProfile, null));
+                    }
+
+                    // Peers absent from this batch have disconnected — remove them immediately.
+                    foreach (var knownPid in _peers.Keys.ToList())
+                    {
+                        if (activePids.Contains(knownPid)) continue;
+                        _peers.TryRemove(knownPid, out _);
+                        _peerConsent.TryRemove(knownPid, out _);
+                        _peerBaseProfile.TryRemove(knownPid, out _);
+                        _inbound.Enqueue(new PeerFrame(knownPid, string.Empty, null));
+                    }
+
+                    continue;
+                }
+
+                // All other message types are sent directly by a peer and must have a sender.
                 if (sender == null || sender == _localId) continue;
 
                 // Unpack DEFLATE+base64 profile payloads back into JSON (see ProfileWire).
@@ -227,7 +294,7 @@ public sealed class NetworkSync : IDisposable
                     if (!string.IsNullOrEmpty(baseP))   baseP   = ProfileWire.Unpack(baseP);
                 }
 
-                // Update peer presence, consent, and base scaling for every message received
+                // Update peer presence, consent, and base scaling for every direct message received.
                 bool isNewPeer = !_peers.ContainsKey(sender);
                 _peers[sender] = DateTime.UtcNow;
                 if (consent.HasValue)
@@ -235,9 +302,8 @@ public sealed class NetworkSync : IDisposable
                 if (!string.IsNullOrEmpty(baseP))
                     _peerBaseProfile[sender] = baseP;
 
-                // First time we hear from this peer — reply with a full hello so they (and we)
-                // discover each other and exchange base scaling immediately, instead of waiting for
-                // the next 30 s heartbeat. Bounded: we only reply on first sighting, never again.
+                // First time we hear from this peer — reply with a full hello so they discover us
+                // immediately instead of waiting for the next heartbeat.
                 if (isNewPeer)
                     _outbound.Enqueue(BuildMessage("hello", null, includeBase: true));
 

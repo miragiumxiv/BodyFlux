@@ -54,6 +54,7 @@ public sealed class Plugin : IDalamudPlugin
     // ── Properties forwarded from SyncManager ─────────────────────────────────
     public string                                 NetworkSyncStatus    => Sync.Status;
     public bool                                   IsNetworkActive      => Sync.IsActive;
+    public int?                                   NetworkMaxPeers      => Sync.MaxPeers;
     public bool                                   IsNetworkIdleDisconnected => Sync.IsIdleDisconnected;
     public bool                                   IsNetworkAwaitingIdleDisconnect => Sync.IsAwaitingIdleDisconnect;
     public int                                    NetworkIdleDisconnectSecondsRemaining => Sync.IdleDisconnectSecondsRemaining;
@@ -168,6 +169,11 @@ public sealed class Plugin : IDalamudPlugin
         Ipc.ProfileUpdated -= OnLocalProfileUpdated;
         Ipc.Dispose();
 
+        // Persist "sync off" so the next launch doesn't auto-connect. Covers normal game close
+        // where the player didn't explicitly log out first. Hard crashes may skip this.
+        Configuration.NetworkSyncEnabled = false;
+        Configuration.Save();
+
         Sync.Dispose();
 
         WindowSystem.RemoveAllWindows();
@@ -187,6 +193,9 @@ public sealed class Plugin : IDalamudPlugin
         {
             Sync.Disconnect();
             _syncStartupDone = false;
+            // Require explicit manual reconnect after every logout — never auto-reconnect on login.
+            Configuration.NetworkSyncEnabled = false;
+            Configuration.Save();
         }
         _wasLoggedIn = loggedIn;
 
@@ -199,7 +208,7 @@ public sealed class Plugin : IDalamudPlugin
             catch (Exception ex) { Log.Error(ex, "[BodyFlux] Network Sync startup failed."); }
         }
 
-        Sync.ProcessIncomingFrames();
+        Sync.Tick((float)framework.UpdateDelta.TotalSeconds);
         Morph.Tick((float)framework.UpdateDelta.TotalSeconds);
 
         // Poll hotkeys only while logged in (no point reading keys at title/character select).

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using BodyFlux.Ipc;
 using BodyFlux.Network;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace BodyFlux.Services;
 
@@ -15,9 +17,21 @@ namespace BodyFlux.Services;
 /// </summary>
 public sealed class SyncManager : IDisposable
 {
-    private const float SendInterval      = 0.033f; // ~30 Hz broadcast cap
+    private const float SendInterval      = 0.05f;  // ~20 Hz broadcast cap
     private const int   PeerStaleSeconds  = 90;     // peers unseen this long are treated as gone
     private const float InactivityTimeout = 300f;   // 5 minutes alone + idle → auto-disconnect
+    private const float InterpInterval    = 0.05f;  // seconds between server batch ticks; interp window
+
+    // Per-peer interpolation state: smoothly blends from the last displayed bone snapshot to the
+    // latest received one, advancing each game tick instead of jumping at the 20 Hz batch rate.
+    private sealed class PeerInterpState
+    {
+        public JObject? From;     // bones at start of current segment (last displayed position)
+        public JObject? To;       // bones at end of current segment (latest received snapshot)
+        public float    Elapsed;  // seconds elapsed since To was received
+        public ushort?  Index;    // cached ObjectTable index (refreshed each time a new frame arrives)
+        public bool     IsLocal;  // true when applying to index 0 (frame was targeted at this player)
+    }
 
     private readonly CustomizePlusIpc _ipc;
     private readonly IObjectTable     _objects;
@@ -26,6 +40,9 @@ public sealed class SyncManager : IDisposable
 
     private NetworkSync? _net;
     private float        _sendTimer;
+    private string?      _lastSentJson;
+    private string?      _lastSentTarget;
+    private readonly Dictionary<string, PeerInterpState> _peerInterp = new();
     // Timestamp of the last time another live peer was present in the group (or the connect time).
     // While we are alone this stops updating, so (now - _lastPeerSeen) measures how long we have been
     // the only player in the Pair Key. Auto-disconnect fires after InactivityTimeout of being alone —
@@ -44,6 +61,7 @@ public sealed class SyncManager : IDisposable
     // ── Status / read-only state (for the UI) ─────────────────────────────────
 
     public string Status           => _net?.Status ?? (_idleDisconnected ? "Disconnected (idle)" : "Disabled");
+    public int?   MaxPeers        => _net?.MaxPeers;
     public bool   IsActive         => _net != null;
     public bool   IsIdleDisconnected => _idleDisconnected;
     public bool   IsConnected   => _net?.IsConnected ?? false;
@@ -153,7 +171,7 @@ public sealed class SyncManager : IDisposable
         var playerName = _objects[0]?.Name.TextValue;
         if (playerName == null) return; // not logged in yet
 
-        _net = new NetworkSync(playerName, _config.PairKey, _config.RelayUrl, _log)
+        _net = new NetworkSync(playerName, _config.PairKey, _config.RelayUrl, _config.InstallId, _log)
         {
             LocalConsent = _config.AllowRemoteMorph
         };
@@ -170,8 +188,11 @@ public sealed class SyncManager : IDisposable
     {
         _net?.Dispose();
         _net               = null;
-        _lastPeerSeen = DateTime.MinValue;
+        _lastPeerSeen      = DateTime.MinValue;
         _idleDisconnected  = false;
+        _lastSentJson      = null;
+        _lastSentTarget    = null;
+        _peerInterp.Clear();
     }
 
     public void Dispose()
@@ -179,6 +200,7 @@ public sealed class SyncManager : IDisposable
         _net?.SendStop();
         _net?.Dispose();
         _net = null;
+        _peerInterp.Clear();
     }
 
     // ── Local base-scaling broadcast ──────────────────────────────────────────
@@ -210,7 +232,12 @@ public sealed class SyncManager : IDisposable
     // ── Outbound frames (called by the morph engine) ──────────────────────────
 
     /// <summary>Primes the throttle so the next <see cref="TickBroadcast"/> sends immediately.</summary>
-    public void ResetSendThrottle() => _sendTimer = SendInterval;
+    public void ResetSendThrottle()
+    {
+        _sendTimer      = SendInterval;
+        _lastSentJson   = null;
+        _lastSentTarget = null;
+    }
 
     /// <summary>
     /// Broadcasts a morph frame at ~30 Hz (and always on the final frame). <paramref name="target"/>
@@ -224,6 +251,13 @@ public sealed class SyncManager : IDisposable
         _sendTimer += seconds;
         if (_sendTimer < SendInterval && progress < 1f) return;
         _sendTimer = 0f;
+
+        // Skip redundant frames: if the profile and target haven't changed and this isn't the
+        // final frame, the relay would just forward the same bytes again for no visual benefit.
+        if (progress < 1f && json == _lastSentJson && target == _lastSentTarget) return;
+
+        _lastSentJson   = json;
+        _lastSentTarget = target;
         _net.SendFrame(json, target);
     }
 
@@ -233,18 +267,18 @@ public sealed class SyncManager : IDisposable
     /// <summary>Tells peers to stop/clear the morph on the given target (or self when null).</summary>
     public void SendStop(string? target = null) => _net?.SendStop(target);
 
-    // ── Inbound frames (called once per framework tick) ───────────────────────
+    // ── Inbound frames + interpolation (called once per framework tick) ──────────────────────
 
-    public void ProcessIncomingFrames()
+    /// <summary>
+    /// Drains the inbound frame queue and advances per-peer bone interpolation.
+    /// Call this exactly once per framework tick in place of the old ProcessIncomingFrames.
+    /// </summary>
+    public void Tick(float delta)
     {
-        // While at least one other peer is present, keep resetting the timer: a group with multiple
-        // connected players is never auto-disconnected. Morph activity is irrelevant — the timer
-        // tracks peer presence only.
+        // While at least one other peer is present, keep resetting the timer.
         if (_net != null && HasLivePeers())
             _lastPeerSeen = DateTime.UtcNow;
 
-        // Auto-disconnect once we have been alone (no other peers) for the full window, regardless
-        // of morph activity — a lone connection only wastes relay bandwidth.
         if (_net != null && _lastPeerSeen != DateTime.MinValue
             && (DateTime.UtcNow - _lastPeerSeen).TotalSeconds >= InactivityTimeout)
         {
@@ -259,35 +293,147 @@ public sealed class SyncManager : IDisposable
             // ── Frames directed at the local player ───────────────────────────
             if (frame.TargetId == _net.LocalId)
             {
-                // A stop (empty profile) only ever REMOVES the external temp profile, so always
-                // honor it — even after we've disabled remote morphing — otherwise a lingering
-                // temp profile could leave us unable to edit our own Customize+. Applying a morph
-                // still requires consent.
+                // Stops are always honored so a lingering temp profile never blocks C+ editing.
                 if (string.IsNullOrEmpty(frame.ProfileJson))
+                {
                     _ipc.DeleteTempProfile(0);
+                    _peerInterp.Remove("_local_");
+                }
                 else if (_config.AllowRemoteMorph)
-                    _ipc.SetTempProfile(0, frame.ProfileJson);
+                {
+                    UpdateInterp("_local_", frame.ProfileJson, 0, isLocal: true);
+                }
                 continue;
             }
 
-            // ── Self-morph or targeted-at-someone-else: apply to their slot ───
-            // For targeted frames, affect the named target; for self-morphs, affect the sender.
-            // These are opaque peer ids; we resolve them to a local ObjectTable slot by hashing.
+            // ── Self-morph or targeted-at-someone-else ────────────────────────
             string targetId = !string.IsNullOrEmpty(frame.TargetId) ? frame.TargetId! : frame.SenderId;
-
-            // Only apply visually to characters that are confirmed members of our sync group.
-            // This prevents accidentally morphing a same-named stranger in the local area.
             if (!_net.Peers.ContainsKey(targetId)) continue;
 
-            var index = FindCharacterIndexById(targetId);
-            if (index == null) continue;
-
             if (string.IsNullOrEmpty(frame.ProfileJson))
-                _ipc.DeleteTempProfile(index.Value);
+            {
+                var idx = FindCharacterIndexById(targetId);
+                if (idx != null) _ipc.DeleteTempProfile(idx.Value);
+                _peerInterp.Remove(targetId);
+            }
             else
-                _ipc.SetTempProfile(index.Value, frame.ProfileJson);
+            {
+                UpdateInterp(targetId, frame.ProfileJson, FindCharacterIndexById(targetId), isLocal: false);
+            }
+        }
+
+        // Apply interpolated morph states at game-tick rate (≈60 Hz) so receivers see smooth
+        // animation even though the relay only delivers snapshots at 20 Hz.
+        if (_peerInterp.Count == 0) return;
+        foreach (var state in _peerInterp.Values)
+        {
+            if (state.From == null || state.To == null) continue;
+
+            state.Elapsed += delta;
+            float t    = Math.Min(state.Elapsed / InterpInterval, 1f);
+            var   json = BuildProfileJson(LerpBones(state.From, state.To, t));
+
+            if (state.IsLocal)
+            {
+                if (_config.AllowRemoteMorph) _ipc.SetTempProfile(0, json);
+            }
+            else if (state.Index.HasValue)
+            {
+                _ipc.SetTempProfile(state.Index.Value, json);
+            }
         }
     }
+
+    // Registers (or updates) an interpolation segment for a peer character.
+    // From = where we currently are; To = newly received target; Elapsed resets to 0.
+    private void UpdateInterp(string key, string profileJson, ushort? index, bool isLocal)
+    {
+        var newBones = ParseBones(profileJson);
+        if (newBones == null) return;
+
+        if (!_peerInterp.TryGetValue(key, out var state))
+            _peerInterp[key] = state = new PeerInterpState();
+
+        state.Index   = index;
+        state.IsLocal = isLocal;
+
+        if (state.From == null)
+        {
+            // First frame for this peer — snap to it immediately (no From to blend from).
+            state.From    = newBones;
+            state.To      = newBones;
+            state.Elapsed = InterpInterval; // mark segment as complete so tick shows To
+        }
+        else
+        {
+            // New frame arrived: freeze From at the current interpolated position so the
+            // transition continues smoothly from wherever we are to the new target.
+            float prevT = Math.Min(state.Elapsed / InterpInterval, 1f);
+            state.From    = LerpBones(state.From, state.To!, prevT);
+            state.To      = newBones;
+            state.Elapsed = 0f;
+        }
+    }
+
+    // ── Bone interpolation helpers ─────────────────────────────────────────────
+
+    private static JObject? ParseBones(string profileJson)
+    {
+        try   { return JObject.Parse(profileJson)["Bones"] as JObject; }
+        catch { return null; }
+    }
+
+    private static JObject LerpBones(JObject from, JObject to, float t)
+    {
+        if (t <= 0f) return from;
+        if (t >= 1f) return to;
+
+        var result = new JObject();
+        foreach (var bone in to.Properties())
+        {
+            result[bone.Name] = from[bone.Name] is JObject fb && bone.Value is JObject tb
+                ? LerpBoneData(fb, tb, t)
+                : bone.Value;
+        }
+        return result;
+    }
+
+    private static JObject LerpBoneData(JObject from, JObject to, float t)
+    {
+        var result = new JObject();
+        foreach (var field in to.Properties())
+        {
+            var fv = from[field.Name];
+            result[field.Name] = fv != null ? LerpVec(fv, field.Value, t) : field.Value.DeepClone();
+        }
+        return result;
+    }
+
+    private static JToken LerpVec(JToken from, JToken to, float t)
+    {
+        if (from is JArray fa && to is JArray ta && fa.Count == ta.Count)
+        {
+            var r = new JArray();
+            for (int i = 0; i < ta.Count; i++)
+                r.Add(fa[i].Value<float>() + (ta[i].Value<float>() - fa[i].Value<float>()) * t);
+            return r;
+        }
+        if (from is JObject fo && to is JObject to2)
+        {
+            var r = new JObject();
+            foreach (var p in to2.Properties())
+            {
+                float fv = fo[p.Name]?.Value<float>() ?? p.Value.Value<float>();
+                r[p.Name] = fv + (p.Value.Value<float>() - fv) * t;
+            }
+            return r;
+        }
+        return to.DeepClone();
+    }
+
+    private static string BuildProfileJson(JObject bones)
+        => new JObject { ["ID"] = "00000000-0000-0000-0000-000000000000", ["Name"] = "BodyFlux", ["Bones"] = bones }
+               .ToString(Formatting.None);
 
     /// <summary>
     /// True when at least one other player in the group has been seen within the staleness window.
@@ -311,7 +457,8 @@ public sealed class SyncManager : IDisposable
         _idleDisconnected  = true;
         _net?.Dispose();
         _net               = null;
-        _lastPeerSeen = DateTime.MinValue;
+        _lastPeerSeen      = DateTime.MinValue;
+        _peerInterp.Clear();
     }
 
     /// <summary>

@@ -1,6 +1,8 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility;
 
 namespace BodyFlux.Windows.Tabs;
@@ -29,6 +31,7 @@ public sealed class SyncTabView
     {
         float bw     = 90 * ImGuiHelpers.GlobalScale;
         float labelW = 90 * ImGuiHelpers.GlobalScale;
+        float iconSz = ImGui.GetFrameHeight(); // square copy button
         var   config = plugin.Configuration;
 
         ImGui.Spacing();
@@ -67,9 +70,12 @@ public sealed class SyncTabView
         // ── Sync Key row ──────────────────────────────────────────────────────
         float inputW = ImGui.GetContentRegionAvail().X - labelW - 8 * ImGuiHelpers.GlobalScale;
 
+        bool isActive = plugin.IsNetworkActive;
+
         ImGui.TextUnformatted("Sync Key:");
         ImGui.SameLine(labelW);
-        ImGui.SetNextItemWidth(inputW - bw * 2 - 8 * ImGuiHelpers.GlobalScale);
+        if (isActive) ImGui.BeginDisabled();
+        ImGui.SetNextItemWidth(inputW - bw * 2 - iconSz - 8 * ImGuiHelpers.GlobalScale);
         string pairKey = config.PairKey;
         if (ImGui.InputText("##SyncKey", ref pairKey, 64))
         {
@@ -83,6 +89,13 @@ public sealed class SyncTabView
             config.PairKey = GeneratePairKey();
             config.Save();
         }
+        if (isActive) ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButton("##copySyncKey", FontAwesomeIcon.Copy))
+            ImGui.SetClipboardText(config.PairKey);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Copy Sync Key to clipboard");
 
         ImGui.SameLine();
         if (plugin.IsNetworkActive)
@@ -129,6 +142,9 @@ public sealed class SyncTabView
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
+        var maxPeers = plugin.NetworkMaxPeers;
+        if (maxPeers.HasValue)
+            ImGui.TextDisabled($"Up to {maxPeers} players can share the same Sync Key simultaneously.");
         ImGui.TextUnformatted("Connected users:");
 
         var peers     = plugin.ConnectedPeers;

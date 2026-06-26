@@ -1,0 +1,39 @@
+app            = "bodyflux-relay"
+primary_region = "fra"
+
+[build]
+
+[env]
+  BODYFLUX_DB_PATH  = "/data/bodyflux.db"
+  BODYFLUX_LOG_DIR  = "/data/logs"
+
+# Persistent volume — stores the SQLite DB and logs across deploys.
+[[mounts]]
+  source      = "bodyflux_data"
+  destination = "/data"
+
+[http_service]
+  internal_port        = 8080
+  force_https          = true
+  auto_stop_machines   = "off"
+  auto_start_machines  = false
+  min_machines_running = 1
+
+  # Fly-level connection cap — enforced at the load balancer before reaching the app.
+  # Set above BODYFLUX_MAX_CONNECTIONS (100) to give headroom for health checks and HTTP requests.
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 300
+    soft_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "GET"
+    path         = "/"
+    timeout      = "5s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus     = 1
+  memory   = "256mb"

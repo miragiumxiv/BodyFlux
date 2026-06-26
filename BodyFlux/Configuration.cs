@@ -13,7 +13,14 @@ public class Configuration : IPluginConfiguration
     public int Version { get; set; } = 0;
 
     /// <summary>Latest schema version. Bump when adding a migration step in <see cref="Migrate"/>.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 3;
+
+    /// <summary>
+    /// Stable anonymous identifier for this installation. Generated once on first load and persisted.
+    /// Sent to the relay (as a query param) so the server can derive a consistent global id for
+    /// quota tracking and moderation — the raw UUID never leaves the plugin process in readable form.
+    /// </summary>
+    public Guid InstallId { get; set; } = Guid.NewGuid();
 
     /// <summary>Number of quick-access preset slots per set (Player and Brio).</summary>
     public const int PresetSlots = 20;
@@ -77,13 +84,14 @@ public class Configuration : IPluginConfiguration
     // installed will receive the frames and apply SetTemporaryProfileOnCharacter
     // to your character slot locally, giving them smooth real-time animation.
     /// <summary>Current relay endpoint. Also the value retired URLs are migrated to (see <see cref="Migrate"/>).</summary>
-    public const string DefaultRelayUrl = "wss://bodyfluxsync.onrender.com";
+    public const string DefaultRelayUrl = "wss://bodyflux-relay.fly.dev";
 
     // Relay URLs from earlier builds that no longer point anywhere. A config still on one of these
     // (i.e. the user never set a custom URL) is repointed to DefaultRelayUrl on load.
     private static readonly string[] DeadRelayUrls =
     [
         "wss://bodyfluxrelay.onrender.com",
+        "wss://bodyfluxsync.onrender.com",
     ];
 
     public bool   NetworkSyncEnabled { get; set; } = false;
@@ -102,6 +110,20 @@ public class Configuration : IPluginConfiguration
 
         // v1: the relay moved hosts. Repoint configs still on a retired default URL.
         if (Version < 1 && Array.IndexOf(DeadRelayUrls, RelayUrl?.TrimEnd('/')) >= 0)
+        {
+            RelayUrl = DefaultRelayUrl;
+            changed  = true;
+        }
+
+        // v2: stable install identity. Configs without one get a fresh UUID on first load.
+        if (Version < 2 && InstallId == Guid.Empty)
+        {
+            InstallId = Guid.NewGuid();
+            changed   = true;
+        }
+
+        // v3: relay moved from Render to Fly.io. Repoint any config still on a retired URL.
+        if (Version < 3 && Array.IndexOf(DeadRelayUrls, RelayUrl?.TrimEnd('/')) >= 0)
         {
             RelayUrl = DefaultRelayUrl;
             changed  = true;
