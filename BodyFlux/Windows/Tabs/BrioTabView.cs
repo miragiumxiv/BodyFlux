@@ -696,7 +696,7 @@ public sealed class BrioTabView
         ImGui.Spacing();
         ImGui.PushTextWrapPos(0f);
         ImGui.TextDisabled(
-            "Save up to 20 Brio morph configurations for quick access. Each preset remembers " +
+            $"Save up to {Configuration.PresetSlots} Brio morph configurations for quick access. Each preset remembers " +
             "the actor and MCDF origin it was saved with, so Apply re-targets that actor — " +
             "it only needs to be present in the current GPose scene.");
         ImGui.PopTextWrapPos();

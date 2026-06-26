@@ -23,7 +23,7 @@ public class Configuration : IPluginConfiguration
     public Guid InstallId { get; set; } = Guid.NewGuid();
 
     /// <summary>Number of quick-access preset slots per set (Player and Brio).</summary>
-    public const int PresetSlots = 20;
+    public const int PresetSlots = 50;
 
     // Progress fraction covered per second  (0.5 = 2 s to complete)
     public float GrowthSpeed     { get; set; } = 0.5f;

@@ -27,7 +27,7 @@ public sealed class ChatCommands : IDisposable
         {
             HelpMessage =
                 "Open the Body Flux window. Subcommands:\n" +
-                "  /bodyflux preset <1-20> [speed]    — Apply a preset slot.\n" +
+                $"  /bodyflux preset <1-{Configuration.PresetSlots}> [speed]    — Apply a preset slot.\n" +
                 "  /bodyflux sequence <name> [speed]  — Play a sequence by name.\n" +
                 "  /bodyflux pause / resume / reverse / reset  — Control the active morph."
         });
@@ -65,13 +65,13 @@ public sealed class ChatCommands : IDisposable
     {
         if (parts.Length < 2)
         {
-            _chat.PrintError("[BodyFlux] Usage: /bodyflux preset <1-20> [speed]");
+            _chat.PrintError($"[BodyFlux] Usage: /bodyflux preset <1-{Configuration.PresetSlots}> [speed]");
             return;
         }
 
         if (!int.TryParse(parts[1], out int presetNum) || presetNum < 1 || presetNum > Configuration.PresetSlots)
         {
-            _chat.PrintError("[BodyFlux] Preset number must be between 1 and 20.");
+            _chat.PrintError($"[BodyFlux] Preset number must be between 1 and {Configuration.PresetSlots}.");
             return;
         }
 
@@ -206,5 +206,5 @@ public sealed class ChatCommands : IDisposable
     private void ShowUsage() =>
         _chat.PrintError(
             "[BodyFlux] Unknown command. Available subcommands: " +
-            "preset <1-20> [speed]  |  sequence <name> [speed]  |  pause  |  resume  |  reverse  |  reset");
+            $"preset <1-{Configuration.PresetSlots}> [speed]  |  sequence <name> [speed]  |  pause  |  resume  |  reverse  |  reset");
 }

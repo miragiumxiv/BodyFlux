@@ -452,8 +452,8 @@ public sealed class PlayerTabView
         ImGui.Spacing();
         ImGui.PushTextWrapPos(0f);
         ImGui.TextDisabled(
-            "Save up to 20 morph configurations for quick access. " +
-            "Use /bodyflux 1–20 to apply from chat.");
+            $"Save up to {Configuration.PresetSlots} morph configurations for quick access. " +
+            $"Use /bodyflux 1–{Configuration.PresetSlots} to apply from chat.");
         ImGui.PopTextWrapPos();
 
         ImGui.Spacing();
