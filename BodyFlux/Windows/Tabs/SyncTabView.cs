@@ -103,7 +103,7 @@ public sealed class SyncTabView
             if (ImGui.Button("Disconnect", new Vector2(bw, 0)))
                 plugin.DisconnectNetworkSync();
         }
-        else if (plugin.IsNetworkIdleDisconnected)
+        else if (plugin.IsNetworkIdleDisconnected || plugin.IsNetworkQuotaExhausted)
         {
             if (ImGui.Button("Reconnect", new Vector2(bw, 0)))
                 plugin.ApplyNetworkSyncConfig();
@@ -121,10 +121,19 @@ public sealed class SyncTabView
             ? new Vector4(0.3f, 0.9f, 0.4f, 1f)
             : status.StartsWith("Connecting")
                 ? new Vector4(0.9f, 0.8f, 0.2f, 1f)
-                : status == "Disconnected (idle)"
-                    ? new Vector4(0.9f, 0.6f, 0.2f, 1f)  // amber — auto-disconnected by inactivity
+                : status is "Disconnected (idle)" or "Daily quota exceeded"
+                    ? new Vector4(0.9f, 0.6f, 0.2f, 1f)  // amber — auto-disconnected
                     : new Vector4(0.7f, 0.7f, 0.7f, 1f);
         ImGui.TextColored(statusColor, $"Status: {status}");
+
+        // ── Daily quota exhausted notice ──────────────────────────────────────
+        if (plugin.IsNetworkQuotaExhausted)
+        {
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextColored(new Vector4(0.9f, 0.4f, 0.2f, 1f),
+                "Daily relay quota exceeded. Sync is paused — please try again tomorrow.");
+            ImGui.PopTextWrapPos();
+        }
 
         // ── Lone-connection auto-disconnect notice ────────────────────────────
         // The relay only needs to carry frames between connected players, so a lone connection is

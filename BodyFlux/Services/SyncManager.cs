@@ -62,6 +62,7 @@ public sealed class SyncManager : IDisposable
     // morph activity does NOT affect it, since the only point of the relay link is sharing with peers.
     private DateTime     _lastPeerSeen = DateTime.MinValue;
     private bool         _idleDisconnected;
+    private bool         _quotaExhausted;
 
     public SyncManager(CustomizePlusIpc ipc, IObjectTable objects, IPluginLog log, Configuration config, IChatGui chat)
     {
@@ -74,10 +75,11 @@ public sealed class SyncManager : IDisposable
 
     // ── Status / read-only state (for the UI) ─────────────────────────────────
 
-    public string Status           => _net?.Status ?? (_idleDisconnected ? "Disconnected (idle)" : "Disabled");
+    public string Status           => _net?.Status ?? (_idleDisconnected ? "Disconnected (idle)" : _quotaExhausted ? "Daily quota exceeded" : "Disabled");
     public int?   MaxPeers        => _net?.MaxPeers;
     public bool   IsActive         => _net != null;
-    public bool   IsIdleDisconnected => _idleDisconnected;
+    public bool   IsIdleDisconnected  => _idleDisconnected;
+    public bool   IsQuotaExhausted   => _quotaExhausted;
     public bool   IsConnected   => _net?.IsConnected ?? false;
     public string LocalPlayerName => _objects[0]?.Name.TextValue ?? string.Empty;
 
@@ -226,6 +228,7 @@ public sealed class SyncManager : IDisposable
         _net?.Dispose();
         _net               = null;
         _idleDisconnected  = false;
+        _quotaExhausted    = false;
         _lastPeerSeen = DateTime.MinValue;
 
         if (!_config.NetworkSyncEnabled) return;
@@ -254,6 +257,7 @@ public sealed class SyncManager : IDisposable
         _net               = null;
         _lastPeerSeen      = DateTime.MinValue;
         _idleDisconnected  = false;
+        _quotaExhausted    = false;
         _lastSentJson      = null;
         _lastSentTarget    = null;
         _peerInterp.Clear();
@@ -342,6 +346,21 @@ public sealed class SyncManager : IDisposable
     /// </summary>
     public void Tick(float delta)
     {
+        // Detect server-initiated quota exhaustion: notify user once, then tear down.
+        if (_net != null && _net.QuotaExceeded)
+        {
+            _quotaExhausted = true;
+            _net.Dispose();
+            _net = null;
+            _lastPeerSeen = DateTime.MinValue;
+            _peerInterp.Clear();
+            _consentStatus.Clear();
+            _incomingRequests.Clear();
+            _onConsentGranted = null;
+            _chat.Print("[BodyFlux] Daily relay quota exceeded — sync paused until tomorrow.");
+            return;
+        }
+
         // While at least one other peer is present, keep resetting the timer.
         if (_net != null && HasLivePeers())
             _lastPeerSeen = DateTime.UtcNow;
@@ -379,9 +398,18 @@ public sealed class SyncManager : IDisposable
 
             if (string.IsNullOrEmpty(frame.ProfileJson))
             {
-                var idx = FindCharacterIndexById(targetId);
-                if (idx != null) _ipc.DeleteTempProfile(idx.Value);
-                _peerInterp.Remove(targetId);
+                // Only delete a temp profile WE applied. A peer we never morphed is very likely
+                // wearing another plugin's (Lightless/Mare) temp profile — that is how their body
+                // appears on our screen at all. Deleting it here would strip that appearance and
+                // snap them to unscaled ("skinny"). The presence of a _peerInterp entry means
+                // BodyFlux owns an active morph on them, so the cleanup is genuinely ours to do.
+                // This stop arrives not just on their own Reset but also via the batch "absent
+                // peer" cleanup and stale eviction — none of which should touch a peer we didn't morph.
+                if (_peerInterp.Remove(targetId))
+                {
+                    var idx = FindCharacterIndexById(targetId);
+                    if (idx != null) _ipc.DeleteTempProfile(idx.Value);
+                }
                 // Peer disconnected — clear sender-side consent so we request again on reconnect.
                 _consentStatus.Remove(targetId);
                 if (_onConsentGranted != null && _consentStatus.Count == 0)

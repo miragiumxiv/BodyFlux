@@ -324,6 +324,16 @@ public sealed class MorphEngine
     /// </summary>
     public void ResetGrowth()
     {
+        // Already fully reset — there is nothing to undo. Bail out so a redundant Reset (or a Reset
+        // after switching the target back to Self) never reaches ResetSession, where the controller's
+        // stale TargetIndex (Stop() does not clear it) would drive a DeleteTempProfile on the last
+        // peer we morphed — stripping the base profile we just restored and snapping them to
+        // unscaled ("skinny"). A live morph always has BoneCount > 0 or a pending origin.
+        if (!_player.Resetting
+            && _player.Controller.BoneCount == 0
+            && _player.OriginProfileJson == null)
+            return;
+
         if (!_player.RootExternalised
             && !_player.Resetting
             && _player.Controller.BoneCount > 0

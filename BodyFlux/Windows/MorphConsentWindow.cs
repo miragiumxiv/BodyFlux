@@ -21,17 +21,25 @@ public sealed class MorphConsentWindow : Window
                ImGuiWindowFlags.NoCollapse)
     {
         _plugin = plugin;
+
+        // Force a decision: no title-bar close button and no Esc-to-close. The window is opened
+        // and closed solely by Plugin tracking HasIncomingMorphRequest each frame; the user must
+        // Accept or Deny. (IsOpen is driven externally because WindowSystem skips PreDraw/Draw
+        // entirely while a window is closed, so the window can't open itself.)
+        ShowCloseButton    = false;
+        RespectCloseHotkey = false;
     }
 
     public override void PreDraw()
     {
-        IsOpen = _plugin.HasIncomingMorphRequest;
+        var center = ImGui.GetIO().DisplaySize / 2f;
+        ImGui.SetNextWindowPos(center, ImGuiCond.Appearing, new System.Numerics.Vector2(0.5f, 0.5f));
     }
 
     public override void Draw()
     {
         var sender = _plugin.IncomingMorphRequestSender;
-        if (sender == null) { IsOpen = false; return; }
+        if (sender == null) return;
 
         float scale = ImGuiHelpers.GlobalScale;
 

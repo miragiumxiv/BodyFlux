@@ -15,7 +15,7 @@ namespace BodyFluxRelay.Core;
 ///   BODYFLUX_LOG_DIR              Directory for the dated log files (default: &lt;app&gt;/logs).
 ///   BODYFLUX_LOG_RETENTION_HOURS  Delete log files older than this (default: 168h aka 7 days).
 ///   BODYFLUX_DB_PATH              Path to the SQLite database file (default: &lt;app&gt;/bodyflux.db).
-///   BODYFLUX_DAILY_QUOTA          Max messages a single user may send per day (default: 50000).
+///   BODYFLUX_DAILY_QUOTA          Max messages a single user may send per day (default: 200000).
 ///   BODYFLUX_MAX_PEERS            Max peers allowed per room (default: 5).
 ///   BODYFLUX_MAX_CONNECTIONS      Max total concurrent WebSocket connections (default: 100).
 ///                                 New connections are rejected with 503 when this limit is reached.
@@ -68,7 +68,7 @@ public sealed record RelayOptions
                 ? db
                 : Path.Combine(AppContext.BaseDirectory, "bodyflux.db"),
             DailyQuota      = Environment.GetEnvironmentVariable("BODYFLUX_DAILY_QUOTA") is string dq
-                && int.TryParse(dq, out var quota) && quota > 0 ? quota : 50_000,
+                && int.TryParse(dq, out var quota) && quota > 0 ? quota : 200_000,
             MaxPeersPerRoom = Environment.GetEnvironmentVariable("BODYFLUX_MAX_PEERS") is string mp
                 && int.TryParse(mp, out var peers) && peers > 0 ? peers : 5,
             MaxConnections  = Environment.GetEnvironmentVariable("BODYFLUX_MAX_CONNECTIONS") is string mc

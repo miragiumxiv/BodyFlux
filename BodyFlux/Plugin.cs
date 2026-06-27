@@ -42,6 +42,7 @@ public sealed class Plugin : IDalamudPlugin
     public Configuration Configuration { get; init; }
     public readonly WindowSystem WindowSystem = new("BodyFluxPlugin");
     private MainWindow MainWindow { get; init; }
+    private MorphConsentWindow _consentWindow = null!;
 
     // ── Properties forwarded from Customize+ IPC ──────────────────────────────
     public IReadOnlyList<(Guid Id, string Name)> SavedProfiles            => Ipc.Profiles;
@@ -56,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
     public bool                                   IsNetworkActive      => Sync.IsActive;
     public int?                                   NetworkMaxPeers      => Sync.MaxPeers;
     public bool                                   IsNetworkIdleDisconnected => Sync.IsIdleDisconnected;
+    public bool                                   IsNetworkQuotaExhausted  => Sync.IsQuotaExhausted;
     public bool                                   IsNetworkAwaitingIdleDisconnect => Sync.IsAwaitingIdleDisconnect;
     public int                                    NetworkIdleDisconnectSecondsRemaining => Sync.IdleDisconnectSecondsRemaining;
     public string                                 LocalPlayerName   => Sync.LocalPlayerName;
@@ -145,7 +147,8 @@ public sealed class Plugin : IDalamudPlugin
 
         MainWindow = new MainWindow(this);
         WindowSystem.AddWindow(MainWindow);
-        WindowSystem.AddWindow(new Windows.MorphConsentWindow(this));
+        _consentWindow = new MorphConsentWindow(this);
+        WindowSystem.AddWindow(_consentWindow);
 
         _chatCommands = new ChatCommands(this, ChatGui, CommandManager);
 
@@ -220,6 +223,11 @@ public sealed class Plugin : IDalamudPlugin
 
         Sync.Tick((float)framework.UpdateDelta.TotalSeconds);
         Morph.Tick((float)framework.UpdateDelta.TotalSeconds);
+
+        // Drive the consent popup's visibility from the live request state. WindowSystem skips a
+        // closed window's PreDraw/Draw entirely, so the window cannot open itself — we toggle it
+        // here each frame instead.
+        _consentWindow.IsOpen = HasIncomingMorphRequest;
 
         // Poll hotkeys only while logged in (no point reading keys at title/character select).
         if (loggedIn)

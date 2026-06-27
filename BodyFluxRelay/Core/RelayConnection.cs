@@ -50,8 +50,7 @@ public sealed class RelayConnection
             if (banned)
             {
                 _log.Write($"[X] room={groupCode}  reason={reason}");
-                await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation,
-                    reason ?? "Access denied", CancellationToken.None);
+                await TryCloseAsync(ws, WebSocketCloseStatus.PolicyViolation, reason ?? "Access denied");
                 return;
             }
 
@@ -64,7 +63,7 @@ public sealed class RelayConnection
         if (peerCount < 0)
         {
             _log.Write($"[!] room={groupCode}  reason=full ({_options.MaxPeersPerRoom} max)");
-            await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, "Room is full", CancellationToken.None);
+            await TryCloseAsync(ws, WebSocketCloseStatus.PolicyViolation, "Room is full");
             if (globalId != null && sessionId >= 0) await _users.CloseSessionAsync(sessionId);
             return;
         }
@@ -115,8 +114,8 @@ public sealed class RelayConnection
                     if (msgCount % QuotaCheckInterval == 0 && await _users.IsOverQuotaAsync(globalId))
                     {
                         _log.Write($"[X] room={groupCode}  gid={gidLabel}  reason=quota exceeded mid-session");
-                        await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation,
-                            "Daily message quota exceeded — try again tomorrow", CancellationToken.None);
+                        await TryCloseAsync(ws, WebSocketCloseStatus.PolicyViolation,
+                            "Daily message quota exceeded — try again tomorrow");
                         break;
                     }
                 }
@@ -188,6 +187,13 @@ public sealed class RelayConnection
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
                 return false;
         return true;
+    }
+
+    private static async Task TryCloseAsync(WebSocket ws, WebSocketCloseStatus status, string description)
+    {
+        try { await ws.CloseAsync(status, description, CancellationToken.None); }
+        catch (WebSocketException) { }
+        catch (OperationCanceledException) { }
     }
 
     private static async Task<byte[]?> ReceiveMessageAsync(WebSocket ws, byte[] buffer)

@@ -46,9 +46,11 @@ public sealed class NetworkSync : IDisposable
     // ── State ─────────────────────────────────────────────────────────────────
     private volatile string _status = "Connecting…";
     private volatile bool   _connected;
+    private volatile bool   _quotaExceeded;
 
-    public string Status      => _status;
-    public bool   IsConnected => _connected;
+    public string Status        => _status;
+    public bool   IsConnected   => _connected;
+    public bool   QuotaExceeded => _quotaExceeded;
 
     // ── Queues ────────────────────────────────────────────────────────────────
     private readonly ConcurrentQueue<PeerFrame>  _inbound        = new();
@@ -180,6 +182,12 @@ public sealed class NetworkSync : IDisposable
                 _log.Warning($"[BodyFlux/Net] {ex.GetType().Name}: {ex.Message}");
             }
 
+            if (_quotaExceeded)
+            {
+                _status = "Daily quota exceeded — try again tomorrow";
+                break;
+            }
+
             if (!_cts.IsCancellationRequested)
                 await Task.Delay(5_000, _cts.Token).ConfigureAwait(false);
         }
@@ -218,7 +226,12 @@ public sealed class NetworkSync : IDisposable
             do
             {
                 result = await ws.ReceiveAsync(buf, ct).ConfigureAwait(false);
-                if (result.MessageType == WebSocketMessageType.Close) return;
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    if (ws.CloseStatusDescription?.Contains("quota", StringComparison.OrdinalIgnoreCase) == true)
+                        _quotaExceeded = true;
+                    return;
+                }
                 ms.Write(buf, 0, result.Count);
             } while (!result.EndOfMessage);
 
