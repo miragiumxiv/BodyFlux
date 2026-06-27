@@ -115,6 +115,15 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    // ── Consent request API ───────────────────────────────────────────────────
+
+    public Services.ConsentStatus GetConsentForTarget(string targetName) => Sync.GetConsentStatus(targetName);
+    public void RequestMorphConsent(string targetName) => Sync.RequestConsent(targetName, onGranted: () => StartGrowth());
+    public bool   HasIncomingMorphRequest      => Sync.HasIncomingRequest;
+    public string? IncomingMorphRequestSender  => Sync.IncomingRequestSenderName;
+    public void AcceptIncomingMorphRequest()   => Sync.AcceptIncomingRequest();
+    public void DenyIncomingMorphRequest()     => Sync.DenyIncomingRequest();
+
     // ── Construction / disposal ───────────────────────────────────────────────
 
     public Plugin()
@@ -128,7 +137,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Ipc   = new CustomizePlusIpc(PluginInterface, Log);
         Brio  = new BrioIpc(PluginInterface, Log);
-        Sync  = new SyncManager(Ipc, ObjectTable, Log, Configuration);
+        Sync  = new SyncManager(Ipc, ObjectTable, Log, Configuration, ChatGui);
         Morph = new MorphEngine(Ipc, Brio, Sync, ObjectTable, ClientState, Configuration, ChatGui, Log);
         Keybinds = new KeybindHandler(this, KeyState);
 
@@ -136,6 +145,7 @@ public sealed class Plugin : IDalamudPlugin
 
         MainWindow = new MainWindow(this);
         WindowSystem.AddWindow(MainWindow);
+        WindowSystem.AddWindow(new Windows.MorphConsentWindow(this));
 
         _chatCommands = new ChatCommands(this, ChatGui, CommandManager);
 

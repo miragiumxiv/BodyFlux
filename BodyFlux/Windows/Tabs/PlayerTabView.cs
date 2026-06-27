@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using BodyFlux.Morph;
+using BodyFlux.Services;
 
 namespace BodyFlux.Windows.Tabs;
 
@@ -368,10 +369,33 @@ public sealed class PlayerTabView
                          && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count
                          && plugin.Progress < 1f;
 
-            using (ImRaii.Disabled(!canStart))
+            string? target     = plugin.TargetPlayerName;
+            bool    isTargeted = !string.IsNullOrEmpty(target) && plugin.IsNetworkActive;
+            var     consent    = isTargeted ? plugin.GetConsentForTarget(target!) : ConsentStatus.Granted;
+
+            if (consent == ConsentStatus.Pending)
             {
-                if (ImGui.Button("Apply", new Vector2(bw, 0)))
-                    plugin.StartGrowth();
+                using (ImRaii.Disabled(true))
+                    ImGui.Button("Waiting…", new Vector2(bw * 1.5f, 0));
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip($"Waiting for {target} to respond to your request…");
+            }
+            else
+            {
+                string label = consent == ConsentStatus.Idle && isTargeted ? "Request" : "Apply";
+                using (ImRaii.Disabled(!canStart))
+                {
+                    if (ImGui.Button(label, new Vector2(bw, 0)))
+                    {
+                        if (consent == ConsentStatus.Idle && isTargeted)
+                            plugin.RequestMorphConsent(target!);
+                        else
+                            plugin.StartGrowth();
+                    }
+                }
+
+                if (consent == ConsentStatus.Idle && isTargeted && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip($"Send a consent request to {target} before applying the morph.");
             }
         }
 
