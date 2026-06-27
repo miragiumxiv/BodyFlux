@@ -37,6 +37,12 @@ public sealed class NetworkSync : IDisposable
     /// </param>
     public readonly record struct PeerFrame(string SenderId, string ProfileJson, string? TargetId);
 
+    // ── Inbound consent message ───────────────────────────────────────────────
+    /// <param name="SenderId">Opaque peer id of the sender.</param>
+    /// <param name="IsRequest">True = morph_request; false = morph_consent (reply).</param>
+    /// <param name="Accepted">For consent replies only: whether the target accepted.</param>
+    public readonly record struct ConsentMsg(string SenderId, bool IsRequest, bool Accepted);
+
     // ── State ─────────────────────────────────────────────────────────────────
     private volatile string _status = "Connecting…";
     private volatile bool   _connected;
@@ -45,8 +51,9 @@ public sealed class NetworkSync : IDisposable
     public bool   IsConnected => _connected;
 
     // ── Queues ────────────────────────────────────────────────────────────────
-    private readonly ConcurrentQueue<PeerFrame> _inbound  = new();
-    private readonly ConcurrentQueue<string>    _outbound = new();
+    private readonly ConcurrentQueue<PeerFrame>  _inbound        = new();
+    private readonly ConcurrentQueue<string>     _outbound       = new();
+    private readonly ConcurrentQueue<ConsentMsg> _inboundConsent = new();
 
     // ── Peer presence ─────────────────────────────────────────────────────────
     private readonly ConcurrentDictionary<string, DateTime> _peers = new();
@@ -311,6 +318,10 @@ public sealed class NetworkSync : IDisposable
                     _inbound.Enqueue(new PeerFrame(sender, profile, target));
                 else if (type == "stop")
                     _inbound.Enqueue(new PeerFrame(sender, string.Empty, target));
+                else if (type == "morph_request" && target == _localId)
+                    _inboundConsent.Enqueue(new ConsentMsg(sender, IsRequest: true,  Accepted: false));
+                else if (type == "morph_consent" && target == _localId)
+                    _inboundConsent.Enqueue(new ConsentMsg(sender, IsRequest: false, Accepted: msg["accepted"]?.Value<bool?>() ?? false));
                 // "hello" — presence/consent already updated above
             }
             catch { /* malformed message — skip silently */ }
@@ -367,6 +378,33 @@ public sealed class NetworkSync : IDisposable
 
     /// <summary>Dequeue one incoming peer frame. Call in a loop until it returns false.</summary>
     public bool TryDequeue(out PeerFrame frame) => _inbound.TryDequeue(out frame);
+
+    /// <summary>Dequeue one incoming consent message. Call in a loop until it returns false.</summary>
+    public bool TryDequeueConsent(out ConsentMsg msg) => _inboundConsent.TryDequeue(out msg);
+
+    /// <summary>Sends a morph_request to a target specified by real character name.</summary>
+    public void SendMorphRequest(string targetName)
+    {
+        if (!_connected) return;
+        _outbound.Enqueue(BuildMessage("morph_request", null, targetName));
+    }
+
+    /// <summary>
+    /// Sends a morph_consent reply. <paramref name="targetPeerId"/> is the opaque peer id of the
+    /// requester (already hashed — no second hash applied).
+    /// </summary>
+    public void SendMorphConsent(string targetPeerId, bool accepted)
+    {
+        if (!_connected) return;
+        var obj = new JObject
+        {
+            ["sender"]   = _localId,
+            ["type"]     = "morph_consent",
+            ["target"]   = targetPeerId,
+            ["accepted"] = accepted
+        };
+        _outbound.Enqueue(obj.ToString(Formatting.None));
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

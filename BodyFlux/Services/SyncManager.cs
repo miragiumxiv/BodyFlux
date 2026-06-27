@@ -8,6 +8,8 @@ using Newtonsoft.Json.Linq;
 
 namespace BodyFlux.Services;
 
+public enum ConsentStatus { Idle, Pending, Granted }
+
 /// <summary>
 /// Owns the <see cref="NetworkSync"/> connection and everything network-related: connecting,
 /// broadcasting the local player's morph frames and base scaling, and applying frames received
@@ -19,7 +21,7 @@ public sealed class SyncManager : IDisposable
 {
     private const float SendInterval      = 0.05f;  // ~20 Hz broadcast cap
     private const int   PeerStaleSeconds  = 90;     // peers unseen this long are treated as gone
-    private const float InactivityTimeout = 300f;   // 5 minutes alone + idle → auto-disconnect
+    private const float InactivityTimeout = 60f;    // 1 minute alone + idle → auto-disconnect
     private const float InterpInterval    = 0.05f;  // seconds between server batch ticks; interp window
 
     // Per-peer interpolation state: smoothly blends from the last displayed bone snapshot to the
@@ -37,12 +39,23 @@ public sealed class SyncManager : IDisposable
     private readonly IObjectTable     _objects;
     private readonly IPluginLog       _log;
     private readonly Configuration    _config;
+    private readonly IChatGui         _chat;
 
     private NetworkSync? _net;
     private float        _sendTimer;
     private string?      _lastSentJson;
     private string?      _lastSentTarget;
     private readonly Dictionary<string, PeerInterpState> _peerInterp = new();
+
+    // ── Consent state (sender side) ────────────────────────────────────────────
+    // Keyed by opaque peer id of the target we requested consent from.
+    private readonly Dictionary<string, ConsentStatus> _consentStatus = new();
+    // Called once when consent is granted so the morph can start automatically.
+    private Action? _onConsentGranted;
+
+    // ── Incoming consent requests (receiver side) ──────────────────────────────
+    // Each entry is the opaque peer id + display name of the requester.
+    private readonly List<(string PeerId, string DisplayName)> _incomingRequests = new();
     // Timestamp of the last time another live peer was present in the group (or the connect time).
     // While we are alone this stops updating, so (now - _lastPeerSeen) measures how long we have been
     // the only player in the Pair Key. Auto-disconnect fires after InactivityTimeout of being alone —
@@ -50,12 +63,13 @@ public sealed class SyncManager : IDisposable
     private DateTime     _lastPeerSeen = DateTime.MinValue;
     private bool         _idleDisconnected;
 
-    public SyncManager(CustomizePlusIpc ipc, IObjectTable objects, IPluginLog log, Configuration config)
+    public SyncManager(CustomizePlusIpc ipc, IObjectTable objects, IPluginLog log, Configuration config, IChatGui chat)
     {
         _ipc     = ipc;
         _objects = objects;
         _log     = log;
         _config  = config;
+        _chat    = chat;
     }
 
     // ── Status / read-only state (for the UI) ─────────────────────────────────
@@ -136,6 +150,56 @@ public sealed class SyncManager : IDisposable
             && seen >= DateTime.UtcNow.AddSeconds(-PeerStaleSeconds);
     }
 
+    // ── Consent API (sender side) ─────────────────────────────────────────────
+
+    /// <summary>Returns the current consent status for a named target.</summary>
+    public ConsentStatus GetConsentStatus(string targetName)
+    {
+        if (_net == null) return ConsentStatus.Granted;
+        var id = PeerIdentity.Of(targetName, _config.PairKey);
+        return _consentStatus.GetValueOrDefault(id, ConsentStatus.Idle);
+    }
+
+    /// <summary>
+    /// Sends a morph_request to the named target and registers an optional callback to run
+    /// automatically when consent is granted.
+    /// </summary>
+    public void RequestConsent(string targetName, Action? onGranted = null)
+    {
+        if (_net == null) return;
+        var id = PeerIdentity.Of(targetName, _config.PairKey);
+        _consentStatus[id] = ConsentStatus.Pending;
+        _onConsentGranted  = onGranted;
+        _net.SendMorphRequest(targetName);
+    }
+
+    // ── Consent API (receiver side) ───────────────────────────────────────────
+
+    /// <summary>True when at least one peer is waiting for a consent decision.</summary>
+    public bool HasIncomingRequest => _incomingRequests.Count > 0;
+
+    /// <summary>Display name of the peer whose request is currently shown, or null.</summary>
+    public string? IncomingRequestSenderName
+        => _incomingRequests.Count > 0 ? _incomingRequests[0].DisplayName : null;
+
+    /// <summary>Accepts the current incoming request and starts the morph on our character.</summary>
+    public void AcceptIncomingRequest()
+    {
+        if (_net == null || _incomingRequests.Count == 0) return;
+        var (peerId, _) = _incomingRequests[0];
+        _incomingRequests.RemoveAt(0);
+        _net.SendMorphConsent(peerId, accepted: true);
+    }
+
+    /// <summary>Denies the current incoming request.</summary>
+    public void DenyIncomingRequest()
+    {
+        if (_net == null || _incomingRequests.Count == 0) return;
+        var (peerId, _) = _incomingRequests[0];
+        _incomingRequests.RemoveAt(0);
+        _net.SendMorphConsent(peerId, accepted: false);
+    }
+
     /// <summary>Returns the base scaling JSON a peer broadcast, or null if not received yet.</summary>
     public bool TryGetPeerBaseProfile(string name, out string? json)
     {
@@ -193,6 +257,9 @@ public sealed class SyncManager : IDisposable
         _lastSentJson      = null;
         _lastSentTarget    = null;
         _peerInterp.Clear();
+        _consentStatus.Clear();
+        _incomingRequests.Clear();
+        _onConsentGranted = null;
     }
 
     public void Dispose()
@@ -315,10 +382,52 @@ public sealed class SyncManager : IDisposable
                 var idx = FindCharacterIndexById(targetId);
                 if (idx != null) _ipc.DeleteTempProfile(idx.Value);
                 _peerInterp.Remove(targetId);
+                // Peer disconnected — clear sender-side consent so we request again on reconnect.
+                _consentStatus.Remove(targetId);
+                if (_onConsentGranted != null && _consentStatus.Count == 0)
+                    _onConsentGranted = null;
+                // Clear any queued incoming request from this peer.
+                _incomingRequests.RemoveAll(r => r.PeerId == targetId);
             }
             else
             {
                 UpdateInterp(targetId, frame.ProfileJson, FindCharacterIndexById(targetId), isLocal: false);
+            }
+        }
+
+        // ── Process consent messages ──────────────────────────────────────────
+        while (_net.TryDequeueConsent(out var consent))
+        {
+            if (consent.IsRequest)
+            {
+                // Incoming morph request — add to queue for the popup window.
+                var names = BuildIdToNameMap();
+                string displayName = names.GetValueOrDefault(consent.SenderId)
+                                  ?? PeerIdentity.Short(consent.SenderId);
+                // Skip duplicate requests from the same peer.
+                if (_incomingRequests.FindIndex(r => r.PeerId == consent.SenderId) < 0)
+                    _incomingRequests.Add((consent.SenderId, displayName));
+            }
+            else if (consent.Accepted)
+            {
+                _consentStatus[consent.SenderId] = ConsentStatus.Granted;
+                var names = BuildIdToNameMap();
+                string who = names.GetValueOrDefault(consent.SenderId)
+                          ?? PeerIdentity.Short(consent.SenderId);
+                _chat.Print($"[BodyFlux] {who} accepted your morph request.");
+                // Fire the auto-start callback if one was registered.
+                var cb = _onConsentGranted;
+                _onConsentGranted = null;
+                cb?.Invoke();
+            }
+            else
+            {
+                _consentStatus[consent.SenderId] = ConsentStatus.Idle;
+                _onConsentGranted = null;
+                var names = BuildIdToNameMap();
+                string who = names.GetValueOrDefault(consent.SenderId)
+                          ?? PeerIdentity.Short(consent.SenderId);
+                _chat.Print($"[BodyFlux] {who} declined your morph request.");
             }
         }
 
@@ -453,12 +562,15 @@ public sealed class SyncManager : IDisposable
 
     private void AutoDisconnect()
     {
-        _log.Information("[BodyFlux/Sync] Auto-disconnected: alone in the group and idle for 5 minutes.");
+        _log.Information("[BodyFlux/Sync] Auto-disconnected: alone in the group and idle for 1 minute.");
         _idleDisconnected  = true;
         _net?.Dispose();
         _net               = null;
         _lastPeerSeen      = DateTime.MinValue;
         _peerInterp.Clear();
+        _consentStatus.Clear();
+        _incomingRequests.Clear();
+        _onConsentGranted = null;
     }
 
     /// <summary>
