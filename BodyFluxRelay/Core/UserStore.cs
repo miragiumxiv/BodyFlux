@@ -287,6 +287,71 @@ public sealed class UserStore : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    /// <summary>Aggregates usage metrics for the current UTC day.</summary>
+    public async Task<DailyReport> GetDailyReportAsync()
+    {
+        await FlushCountsAsync();
+
+        var todayFull  = DateTime.UtcNow.Date.ToString("O");       // matches daily_reset_at format
+        var todayShort = DateTime.UtcNow.Date.ToString("yyyy-MM-dd"); // for date() comparisons
+        var nearThreshold = (long)(_dailyQuota * 0.8);
+
+        await _gate.WaitAsync();
+        try
+        {
+            await using var db = Open();
+            await db.OpenAsync();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    (SELECT COUNT(*)
+                     FROM users
+                     WHERE daily_reset_at = @todayFull AND daily_messages > 0)                          AS active_users,
+                    (SELECT COALESCE(SUM(daily_messages), 0)
+                     FROM users
+                     WHERE daily_reset_at = @todayFull)                                                 AS total_messages,
+                    (SELECT COUNT(*)
+                     FROM users
+                     WHERE date(first_seen) = @todayShort)                                              AS new_users,
+                    (SELECT COUNT(*)
+                     FROM users
+                     WHERE daily_reset_at = @todayFull AND daily_messages >= @quota)                    AS quota_exceeded,
+                    (SELECT COUNT(*)
+                     FROM users
+                     WHERE daily_reset_at = @todayFull AND daily_messages > @near AND daily_messages < @quota) AS near_quota,
+                    (SELECT COUNT(*)
+                     FROM ban_audit_log
+                     WHERE date(actioned_at) = @todayShort AND action = 'ban')                          AS bans_today,
+                    (SELECT COUNT(*)
+                     FROM sessions
+                     WHERE date(connected_at) = @todayShort)                                            AS sessions_today,
+                    (SELECT AVG((julianday(disconnected_at) - julianday(connected_at)) * 86400)
+                     FROM sessions
+                     WHERE date(connected_at) = @todayShort AND disconnected_at IS NOT NULL)            AS avg_session_secs
+                """;
+            cmd.Parameters.AddWithValue("@todayFull",  todayFull);
+            cmd.Parameters.AddWithValue("@todayShort", todayShort);
+            cmd.Parameters.AddWithValue("@quota",      _dailyQuota);
+            cmd.Parameters.AddWithValue("@near",       nearThreshold);
+
+            await using var r = await cmd.ExecuteReaderAsync();
+            await r.ReadAsync();
+
+            return new DailyReport(
+                Date:           todayShort,
+                DailyQuota:     _dailyQuota,
+                ActiveUsers:    r.GetInt64(0),
+                TotalMessages:  r.GetInt64(1),
+                NewUsers:       r.GetInt64(2),
+                QuotaExceeded:  r.GetInt64(3),
+                NearQuota:      r.GetInt64(4),
+                BansToday:      r.GetInt64(5),
+                SessionsToday:  r.GetInt64(6),
+                AvgSessionSecs: r.IsDBNull(7) ? null : r.GetDouble(7));
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Returns the top <paramref name="count"/> users by today's message count.</summary>
     public async Task<IReadOnlyList<QuotaEntry>> GetTopQuotaUsersAsync(int count)
     {
@@ -392,6 +457,18 @@ public sealed class UserStore : IAsyncDisposable
         _gate.Dispose();
     }
 }
+
+public sealed record DailyReport(
+    string  Date,
+    int     DailyQuota,
+    long    ActiveUsers,
+    long    TotalMessages,
+    long    NewUsers,
+    long    QuotaExceeded,
+    long    NearQuota,
+    long    BansToday,
+    long    SessionsToday,
+    double? AvgSessionSecs);
 
 public sealed record QuotaEntry(
     string GlobalId,

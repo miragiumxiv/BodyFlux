@@ -132,6 +132,14 @@ app.MapDelete("/admin/ban/{globalId}", async (HttpContext ctx, string globalId) 
     return Results.Ok(new { unbanned = globalId });
 });
 
+// GET /admin/daily-report
+app.MapGet("/admin/daily-report", async (HttpContext ctx) =>
+{
+    if (!AdminAuth(ctx)) return Results.NotFound();
+    var report = await users.GetDailyReportAsync();
+    return Results.Ok(report);
+});
+
 // GET /admin/stats
 app.MapGet("/admin/stats", async (HttpContext ctx) =>
 {
