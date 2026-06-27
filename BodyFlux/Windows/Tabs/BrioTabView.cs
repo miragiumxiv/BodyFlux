@@ -710,6 +710,9 @@ public sealed class BrioTabView
         bool hasActor = plugin.SelectedBrioActorIndex >= 0;
         var  actors   = plugin.GetGPoseActors();
 
+        using var scroll = ImRaii.Child("##BrioPresetScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         for (int i = 0; i < Configuration.PresetSlots; i++)
         {
             var  preset    = i < config.BrioPresets.Count ? config.BrioPresets[i] : null;

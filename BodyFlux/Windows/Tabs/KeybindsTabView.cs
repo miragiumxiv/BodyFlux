@@ -92,6 +92,9 @@ public sealed class KeybindsTabView
         ImGui.PopTextWrapPos();
         ImGui.Spacing();
 
+        using var scroll = ImRaii.Child("##KeybindPresetScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         for (int slot = 0; slot < Configuration.PresetSlots; slot++)
         {
             var    preset   = slot < config.Presets.Count ? config.Presets[slot] : null;

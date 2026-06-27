@@ -463,6 +463,9 @@ public sealed class PlayerTabView
         bool canSave = plugin.SelectedProfileIndex >= 0
                     && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count;
 
+        using var scroll = ImRaii.Child("##PresetScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         for (int i = 0; i < Configuration.PresetSlots; i++)
         {
             var  preset    = i < config.Presets.Count ? config.Presets[i] : null;
