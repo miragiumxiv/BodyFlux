@@ -46,6 +46,9 @@ public sealed class PlayerTabView
 
     private void DrawMorphSubTab()
     {
+        using var scroll = ImRaii.Child("##PlayerMorphScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         bool cpOk = plugin.IsCustomizePlusAvailable;
 
         // ── Requirements ──────────────────────────────────────────────────────
@@ -469,6 +472,9 @@ public sealed class PlayerTabView
 
     private void DrawPresetsTab()
     {
+        using var scroll = ImRaii.Child("##PlayerPresetScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         bool  busy   = plugin.IsMorphing;
         float bw     = 90 * ImGuiHelpers.GlobalScale;
@@ -486,9 +492,6 @@ public sealed class PlayerTabView
 
         bool canSave = plugin.SelectedProfileIndex >= 0
                     && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count;
-
-        using var scroll = ImRaii.Child("##PresetScroll", new Vector2(0, 0), false);
-        if (!scroll) return;
 
         for (int i = 0; i < Configuration.PresetSlots; i++)
         {
@@ -532,6 +535,9 @@ public sealed class PlayerTabView
 
     private void DrawSequencesSubTab()
     {
+        using var scroll = ImRaii.Child("##PlayerSeqScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         float scale  = ImGuiHelpers.GlobalScale;
         float bw     = 90 * scale;
