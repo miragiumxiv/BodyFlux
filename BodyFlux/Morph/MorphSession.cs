@@ -26,6 +26,15 @@ public sealed class MorphSession
     /// <summary>Peer name for a targeted-player morph; <c>null</c> for self and Brio morphs.</summary>
     public string? NetworkTargetName;
 
+    /// <summary>
+    /// Final morphed profile JSON for a completed remote-target Simple morph. Stored when the
+    /// morph reaches 100% so <see cref="MorphEngine"/> can re-apply it every tick and hold the
+    /// destination state against the SyncManager's peer-interp, which would otherwise overwrite
+    /// it with the target's base profile and snap them back on the applier's screen.
+    /// Cleared on Reset.
+    /// </summary>
+    public string? CompletedRemoteJson;
+
     /// <summary>Per-morph speed override (sequence step / preset / chat); <c>null</c> = use the tab default.</summary>
     public float? SpeedOverride;
 

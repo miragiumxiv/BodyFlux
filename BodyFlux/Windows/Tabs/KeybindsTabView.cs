@@ -36,6 +36,9 @@ public sealed class KeybindsTabView
 
     public void Draw()
     {
+        using var scroll = ImRaii.Child("##KeybindsScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         float scale  = ImGuiHelpers.GlobalScale;
         float bw     = 90 * scale;
@@ -91,9 +94,6 @@ public sealed class KeybindsTabView
             "Brio preset while in GPose. Empty slots do nothing.");
         ImGui.PopTextWrapPos();
         ImGui.Spacing();
-
-        using var scroll = ImRaii.Child("##KeybindPresetScroll", new Vector2(0, 0), false);
-        if (!scroll) return;
 
         for (int slot = 0; slot < Configuration.PresetSlots; slot++)
         {

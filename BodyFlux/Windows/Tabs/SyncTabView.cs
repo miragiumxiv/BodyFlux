@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility;
+using Dalamud.Interface.Utility.Raii;
 
 namespace BodyFlux.Windows.Tabs;
 
@@ -29,6 +30,9 @@ public sealed class SyncTabView
 
     public void Draw()
     {
+        using var scroll = ImRaii.Child("##SyncScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         float bw     = 90 * ImGuiHelpers.GlobalScale;
         float labelW = 90 * ImGuiHelpers.GlobalScale;
         float iconSz = ImGui.GetFrameHeight(); // square copy button

@@ -65,6 +65,9 @@ public sealed class BrioTabView
 
     private void DrawMorphSubTab()
     {
+        using var scroll = ImRaii.Child("##BrioMorphScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         float scale  = ImGuiHelpers.GlobalScale;
         float bw     = 90 * scale;
         var   config = plugin.Configuration;
@@ -398,6 +401,9 @@ public sealed class BrioTabView
 
     private void DrawSequencesSubTab()
     {
+        using var scroll = ImRaii.Child("##BrioSeqScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         float scale  = ImGuiHelpers.GlobalScale;
         float bw     = 90 * scale;
@@ -464,6 +470,9 @@ public sealed class BrioTabView
 
     private void DrawGroupSubTab()
     {
+        using var scroll = ImRaii.Child("##BrioGroupScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         float scale  = ImGuiHelpers.GlobalScale;
         float bw     = 90 * scale;
@@ -690,6 +699,9 @@ public sealed class BrioTabView
 
     private void DrawPresetsTab()
     {
+        using var scroll = ImRaii.Child("##BrioPresetScroll", new Vector2(0, 0), false);
+        if (!scroll) return;
+
         var   config = plugin.Configuration;
         float bw     = 90 * ImGuiHelpers.GlobalScale;
 
@@ -709,9 +721,6 @@ public sealed class BrioTabView
                      && plugin.SelectedBrioDestIndex  < plugin.SavedProfiles.Count;
         bool hasActor = plugin.SelectedBrioActorIndex >= 0;
         var  actors   = plugin.GetGPoseActors();
-
-        using var scroll = ImRaii.Child("##BrioPresetScroll", new Vector2(0, 0), false);
-        if (!scroll) return;
 
         for (int i = 0; i < Configuration.PresetSlots; i++)
         {
