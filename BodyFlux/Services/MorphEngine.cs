@@ -141,6 +141,14 @@ public sealed class MorphEngine
             ResetSession(_player, isPlayer: true);
         }
 
+        // For a completed remote-target morph (progress hit 1.0, IsMorphing stopped), keep
+        // re-applying the final morphed profile each tick. The SyncManager's peer-interp is
+        // continuously fed the target's own base-profile broadcasts and would otherwise
+        // overwrite the temp profile and snap the target back to unmorhped on the applier's screen.
+        if (!_player.Controller.IsMorphing && !_player.Resetting
+            && _player.NetworkTargetName != null && _player.CompletedRemoteJson != null)
+            _ipc.SetTempProfile(_player.TargetIndex, _player.CompletedRemoteJson);
+
         if (_brio.Count > 0)
             foreach (var s in _brio.Values)
                 if (s.Controller.IsMorphing)
@@ -167,6 +175,13 @@ public sealed class MorphEngine
 
         if (broadcast && (s.Controller.TargetIndex == 0 || s.NetworkTargetName != null))
             _sync.TickBroadcast(json, s.NetworkTargetName, s.Controller.Progress, seconds);
+
+        // Cache final frame for remote-target Simple morphs so the engine can re-apply it after
+        // the morph stops. Without this the SyncManager's peer-interp (driven by the target's own
+        // base-profile broadcasts) would overwrite the temp profile and snap them back on
+        // the applier's screen the moment TickSession stops being called.
+        if (s.NetworkTargetName != null && !s.Controller.IsMorphing && s.Controller.Progress >= 1f)
+            s.CompletedRemoteJson = json;
 
         if (s.SeqRunning && !s.Controller.IsMorphing && s.Controller.Progress >= 1f)
             AdvanceSequence(s);
@@ -918,8 +933,9 @@ public sealed class MorphEngine
         else
             _ipc.DeleteTempProfile(targetIndex);
 
-        s.OriginProfileJson = null;
-        s.NetworkTargetName = null;
+        s.OriginProfileJson    = null;
+        s.NetworkTargetName    = null;
+        s.CompletedRemoteJson  = null;
     }
 
     private ushort? FindCharacterIndex(string characterName)

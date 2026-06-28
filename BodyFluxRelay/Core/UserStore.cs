@@ -74,6 +74,11 @@ public sealed class UserStore : IAsyncDisposable
 
         await ExecAsync(db, "CREATE INDEX IF NOT EXISTS idx_sessions_gid ON sessions(global_id);");
 
+        // Schema migrations — ALTER TABLE ADD COLUMN has no IF NOT EXISTS in SQLite; swallow the
+        // "duplicate column" error that fires on subsequent starts.
+        try { await ExecAsync(db, "ALTER TABLE sessions ADD COLUMN bytes_in  INTEGER NOT NULL DEFAULT 0;"); } catch { }
+        try { await ExecAsync(db, "ALTER TABLE sessions ADD COLUMN bytes_out INTEGER NOT NULL DEFAULT 0;"); } catch { }
+
         await ExecAsync(db, """
             CREATE TABLE IF NOT EXISTS ban_audit_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -211,8 +216,8 @@ public sealed class UserStore : IAsyncDisposable
             finally { _gate.Release(); }
         });
 
-    /// <summary>Flushes pending message counts and stamps the session's disconnected_at.</summary>
-    public async Task CloseSessionAsync(long sessionId)
+    /// <summary>Flushes pending message counts and stamps the session's disconnected_at and byte totals.</summary>
+    public async Task CloseSessionAsync(long sessionId, long bytesIn, long bytesOut)
     {
         await FlushCountsAsync();
         await _gate.WaitAsync();
@@ -221,8 +226,8 @@ public sealed class UserStore : IAsyncDisposable
             await using var db = Open();
             await db.OpenAsync();
             await ExecAsync(db,
-                "UPDATE sessions SET disconnected_at = @ts WHERE id = @id",
-                ("@ts", DateTime.UtcNow.ToString("O")), ("@id", sessionId));
+                "UPDATE sessions SET disconnected_at = @ts, bytes_in = @bi, bytes_out = @bo WHERE id = @id",
+                ("@ts", DateTime.UtcNow.ToString("O")), ("@bi", bytesIn), ("@bo", bytesOut), ("@id", sessionId));
         }
         finally { _gate.Release(); }
     }
@@ -327,7 +332,9 @@ public sealed class UserStore : IAsyncDisposable
                      WHERE date(connected_at) = @todayShort)                                            AS sessions_today,
                     (SELECT AVG((julianday(disconnected_at) - julianday(connected_at)) * 86400)
                      FROM sessions
-                     WHERE date(connected_at) = @todayShort AND disconnected_at IS NOT NULL)            AS avg_session_secs
+                     WHERE date(connected_at) = @todayShort AND disconnected_at IS NOT NULL)            AS avg_session_secs,
+                    (SELECT COALESCE(SUM(bytes_in),  0) FROM sessions WHERE date(connected_at) = @todayShort)  AS total_bytes_in,
+                    (SELECT COALESCE(SUM(bytes_out), 0) FROM sessions WHERE date(connected_at) = @todayShort)  AS total_bytes_out
                 """;
             cmd.Parameters.AddWithValue("@todayFull",  todayFull);
             cmd.Parameters.AddWithValue("@todayShort", todayShort);
@@ -337,6 +344,7 @@ public sealed class UserStore : IAsyncDisposable
             await using var r = await cmd.ExecuteReaderAsync();
             await r.ReadAsync();
 
+            const double toMb = 1024.0 * 1024.0;
             return new DailyReport(
                 Date:           todayShort,
                 DailyQuota:     _dailyQuota,
@@ -347,7 +355,9 @@ public sealed class UserStore : IAsyncDisposable
                 NearQuota:      r.GetInt64(4),
                 BansToday:      r.GetInt64(5),
                 SessionsToday:  r.GetInt64(6),
-                AvgSessionSecs: r.IsDBNull(7) ? null : r.GetDouble(7));
+                AvgSessionSecs: r.IsDBNull(7) ? null : r.GetDouble(7),
+                TotalMbIn:      Math.Round(r.GetInt64(8) / toMb, 2),
+                TotalMbOut:     Math.Round(r.GetInt64(9) / toMb, 2));
         }
         finally { _gate.Release(); }
     }
@@ -468,7 +478,9 @@ public sealed record DailyReport(
     long    NearQuota,
     long    BansToday,
     long    SessionsToday,
-    double? AvgSessionSecs);
+    double? AvgSessionSecs,
+    double  TotalMbIn,
+    double  TotalMbOut);
 
 public sealed record QuotaEntry(
     string GlobalId,

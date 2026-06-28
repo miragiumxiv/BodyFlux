@@ -64,7 +64,7 @@ public sealed class RelayConnection
         {
             _log.Write($"[!] room={groupCode}  reason=full ({_options.MaxPeersPerRoom} max)");
             await TryCloseAsync(ws, WebSocketCloseStatus.PolicyViolation, "Room is full");
-            if (globalId != null && sessionId >= 0) await _users.CloseSessionAsync(sessionId);
+            if (globalId != null && sessionId >= 0) await _users.CloseSessionAsync(sessionId, 0, 0);
             return;
         }
         var gidLabel  = globalId ?? "anon";
@@ -140,7 +140,7 @@ public sealed class RelayConnection
             if (remaining == 0) _log.Write($"[room-] room={groupCode}  msgs={totalMsgs}  in={FormatBytes(totalIn)}  out={FormatBytes(totalOut)}  dur={roomDur:h\\:mm\\:ss}");
 
             if (globalId != null && sessionId >= 0)
-                await _users.CloseSessionAsync(sessionId);
+                await _users.CloseSessionAsync(sessionId, recvBytes, sentBytes);
         }
     }
 
