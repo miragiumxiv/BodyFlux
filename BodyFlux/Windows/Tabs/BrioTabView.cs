@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.ImGuiFileDialog;
@@ -20,20 +21,23 @@ public sealed class BrioTabView
     private readonly SequenceListView  seqList;
     private readonly FileDialogManager fileDialog; // shared with MainWindow, drawn at the top level
 
-    private string _profileFilter   = ""; // Single-tab destination picker filter
-    private string _seqAddFilter     = ""; // Sequences "Add step" picker filter
+    private string          _profileFilter   = ""; // Single-tab destination picker filter
+    private string          _seqAddFilter    = ""; // Sequences "Add step" picker filter
+    private MorphTargetMode _seqAddMode      = MorphTargetMode.FullProfile; // Sequences "Add step" target mode
 
     // ── Group (Multi) sub-tab state ───────────────────────────────────────────
     // One configurable entry per actor; "Apply All" morphs them simultaneously. In-memory only.
     private sealed class GroupEntry
     {
         public ushort     ActorIndex;
-        public int        DestIndex = -1;      // index into SavedProfiles
+        public int        DestIndex     = -1;  // index into SavedProfiles
+        public int        TemplateIndex = -1;  // index into SavedTemplates (used when TargetMode == TemplateOverlay)
         public string?    OriginMcdfJson;      // captured MCDF JSON (null = permanent/identity)
         public string     OriginMcdfLabel = "";
         public float      Speed  = 0.5f;
         public MorphMode  Mode   = MorphMode.Simple;
         public EasingMode Easing = EasingMode.Linear;
+        public MorphTargetMode TargetMode = MorphTargetMode.FullProfile;
     }
     private readonly List<GroupEntry> _group = [];
     private string _groupProfileFilter = ""; // shared filter for the per-row destination pickers
@@ -187,57 +191,68 @@ public sealed class BrioTabView
         ImGui.Separator();
         ImGui.Spacing();
 
-        // ── Destination profile selector ──────────────────────────────────────
-        ImGui.TextUnformatted("Destination Profile:");
+        // ── Target mode selector ──────────────────────────────────────────────
+        ImGui.TextUnformatted("Morph Target:");
+        ImGui.Spacing();
+
+        int  targetModeInt     = (int)config.MorphTargetMode;
+        bool targetModeChanged = false;
+        if (ImGui.RadioButton("Full Profile##Brio", ref targetModeInt, (int)MorphTargetMode.FullProfile))
+            targetModeChanged = true;
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Template Overlay##Brio", ref targetModeInt, (int)MorphTargetMode.TemplateOverlay))
+            targetModeChanged = true;
+        if (targetModeChanged) { config.MorphTargetMode = (MorphTargetMode)targetModeInt; config.Save(); }
+
+        bool overlay = config.MorphTargetMode == MorphTargetMode.TemplateOverlay;
+
+        ImGui.Spacing();
+        ImGui.PushTextWrapPos(0f);
+        string targetModeDesc = overlay
+            ? "Blends only the bones defined in the selected Customize+ Template onto the actor's current profile — every other bone stays untouched."
+            : "Applies the whole selected profile as the destination — bones not present in it reset to default.";
+        ImGui.TextDisabled(targetModeDesc);
+        ImGui.PopTextWrapPos();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        // ── Destination selector ──────────────────────────────────────────────
+        ImGui.TextUnformatted(overlay ? "Overlay Template:" : "Destination Profile:");
+        if (overlay)
+        {
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextDisabled("Only templates attached to at least one Customize+ profile show up here.");
+            ImGui.PopTextWrapPos();
+        }
 
         float destW = ImGui.GetContentRegionAvail().X - (bw + 8 * scale);
         ImGui.SetNextItemWidth(destW);
 
-        string destPreview = plugin.SelectedBrioDestIndex >= 0
-                          && plugin.SelectedBrioDestIndex < plugin.SavedProfiles.Count
-            ? plugin.SavedProfiles[plugin.SelectedBrioDestIndex].Name
-            : "— select a profile —";
-
-        if (ImGui.BeginCombo("##BrioDestProfile", destPreview))
+        if (overlay)
         {
-            if (ImGui.IsWindowAppearing())
-            {
-                _profileFilter = "";
-                ImGui.SetKeyboardFocusHere();
-            }
-
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputText("##BrioProfileFilter", ref _profileFilter, 128);
-            ImGui.Separator();
-
-            bool anyVisible = false;
-            for (int i = 0; i < plugin.SavedProfiles.Count; i++)
-            {
-                if (!string.IsNullOrEmpty(_profileFilter) &&
-                    !plugin.SavedProfiles[i].Name.Contains(_profileFilter, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                anyVisible = true;
-                bool sel = plugin.SelectedBrioDestIndex == i;
-                if (ImGui.Selectable(plugin.SavedProfiles[i].Name, sel))
-                {
-                    plugin.SelectedBrioDestIndex = i;
-                    _profileFilter               = "";
-                }
-                if (sel) ImGui.SetItemDefaultFocus();
-            }
-
-            if (!anyVisible)
-                ImGui.TextDisabled("No matches.");
-
-            ImGui.EndCombo();
+            var names = plugin.SavedTemplates.Select(t => t.Name).ToList();
+            int  idx  = plugin.SelectedBrioTemplateIndex;
+            UiHelpers.DrawFilterableCombo("##BrioDestTemplate", "##BrioTemplateFilter", names,
+                ref idx, ref _profileFilter, "— select a template —");
+            plugin.SelectedBrioTemplateIndex = idx;
+        }
+        else
+        {
+            var names = plugin.SavedProfiles.Select(p => p.Name).ToList();
+            int  idx  = plugin.SelectedBrioDestIndex;
+            UiHelpers.DrawFilterableCombo("##BrioDestProfile", "##BrioProfileFilter", names,
+                ref idx, ref _profileFilter, "— select a profile —");
+            plugin.SelectedBrioDestIndex = idx;
         }
 
         ImGui.SameLine();
         if (ImGui.Button("Refresh##BrioRefresh", new Vector2(bw, 0)))
         {
             plugin.RefreshProfiles();
-            plugin.SelectedBrioDestIndex = -1;
+            plugin.SelectedBrioDestIndex     = -1;
+            plugin.SelectedBrioTemplateIndex = -1;
         }
 
         ImGui.Spacing();
@@ -320,9 +335,10 @@ public sealed class BrioTabView
         ImGui.Spacing();
 
         // ── Apply (adds/updates the selected actor's morph) ───────────────────
-        bool canApply = plugin.SelectedBrioActorIndex >= 0
-                     && plugin.SelectedBrioDestIndex  >= 0
-                     && plugin.SelectedBrioDestIndex  <  plugin.SavedProfiles.Count;
+        bool hasDestination = config.MorphTargetMode == MorphTargetMode.TemplateOverlay
+            ? plugin.SelectedBrioTemplateIndex >= 0 && plugin.SelectedBrioTemplateIndex < plugin.SavedTemplates.Count
+            : plugin.SelectedBrioDestIndex     >= 0 && plugin.SelectedBrioDestIndex     < plugin.SavedProfiles.Count;
+        bool canApply = plugin.SelectedBrioActorIndex >= 0 && hasDestination;
         using (ImRaii.Disabled(!canApply))
         {
             if (ImGui.Button("Apply##Brio", new Vector2(bw + 30 * scale, 0)))
@@ -449,7 +465,7 @@ public sealed class BrioTabView
         // footer — Play just launches the sequence onto the selected actor.
         int dummyPlaying = -1;
         int playRequest = seqList.Draw(
-            config.BrioSequences, ref dummyPlaying, ref _seqAddFilter,
+            config.BrioSequences, ref dummyPlaying, ref _seqAddFilter, ref _seqAddMode,
             config.BrioGrowthSpeed, busy: false, seqActive: false,
             playAllowed: actorSelected, "Select an actor in the Single tab first.",
             onReset: ResetSequenceTarget, bw, scale);
@@ -552,7 +568,9 @@ public sealed class BrioTabView
         ImGui.Spacing();
 
         int applyable = _group.FindAll(g =>
-            g.DestIndex >= 0 && g.DestIndex < plugin.SavedProfiles.Count
+            (g.TargetMode == MorphTargetMode.TemplateOverlay
+                ? g.TemplateIndex >= 0 && g.TemplateIndex < plugin.SavedTemplates.Count
+                : g.DestIndex     >= 0 && g.DestIndex     < plugin.SavedProfiles.Count)
             && actors.Exists(a => a.Index == g.ActorIndex)).Count;
 
         using (ImRaii.Disabled(applyable == 0))
@@ -580,47 +598,59 @@ public sealed class BrioTabView
         var actors = plugin.GetGPoseActors();
         foreach (var g in _group)
         {
-            if (g.DestIndex < 0 || g.DestIndex >= plugin.SavedProfiles.Count) continue;
             if (!actors.Exists(a => a.Index == g.ActorIndex)) continue; // gone from scene
-            var destId = plugin.SavedProfiles[g.DestIndex].Id;
-            plugin.StartBrioMorphFor(g.ActorIndex, destId, g.OriginMcdfJson, g.Speed, g.Mode, g.Easing);
+
+            Guid destId; Guid? templateOwnerProfileId = null;
+            if (g.TargetMode == MorphTargetMode.TemplateOverlay)
+            {
+                if (g.TemplateIndex < 0 || g.TemplateIndex >= plugin.SavedTemplates.Count) continue;
+                var t = plugin.SavedTemplates[g.TemplateIndex];
+                destId = t.Id; templateOwnerProfileId = t.OwnerProfileId;
+            }
+            else
+            {
+                if (g.DestIndex < 0 || g.DestIndex >= plugin.SavedProfiles.Count) continue;
+                destId = plugin.SavedProfiles[g.DestIndex].Id;
+            }
+
+            plugin.StartBrioMorphFor(g.ActorIndex, destId, g.OriginMcdfJson, g.Speed, g.Mode, g.Easing,
+                g.TargetMode, templateOwnerProfileId);
         }
     }
 
     /// <summary>Draws the config editor for one group entry (destination, MCDF, speed, mode, easing).</summary>
     private void DrawGroupEntryEditor(GroupEntry g, int index, float bw, float scale, ref int removeIdx)
     {
-        // ── Destination profile ───────────────────────────────────────────────
-        ImGui.TextUnformatted("Destination:");
+        // ── Target mode ────────────────────────────────────────────────────────
+        ImGui.TextUnformatted("Target:");
+        ImGui.SameLine();
+        int grpTargetModeInt = (int)g.TargetMode;
+        if (ImGui.RadioButton("Full##grptgt", ref grpTargetModeInt, (int)MorphTargetMode.FullProfile))
+            g.TargetMode = (MorphTargetMode)grpTargetModeInt;
+        ImGui.SameLine();
+        if (ImGui.RadioButton("Overlay##grptgt", ref grpTargetModeInt, (int)MorphTargetMode.TemplateOverlay))
+            g.TargetMode = (MorphTargetMode)grpTargetModeInt;
+
+        // ── Destination ───────────────────────────────────────────────────────
+        bool grpOverlay = g.TargetMode == MorphTargetMode.TemplateOverlay;
+        ImGui.TextUnformatted(grpOverlay ? "Overlay:" : "Destination:");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
-        string destPreview = g.DestIndex >= 0 && g.DestIndex < plugin.SavedProfiles.Count
-            ? plugin.SavedProfiles[g.DestIndex].Name
-            : "— select a profile —";
-        if (ImGui.BeginCombo("##grpdest", destPreview))
+        if (grpOverlay)
         {
-            if (ImGui.IsWindowAppearing()) { _groupProfileFilter = ""; ImGui.SetKeyboardFocusHere(); }
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputText("##grpdestfilter", ref _groupProfileFilter, 128);
-            ImGui.Separator();
-
-            bool any = false;
-            for (int i = 0; i < plugin.SavedProfiles.Count; i++)
-            {
-                if (!string.IsNullOrEmpty(_groupProfileFilter) &&
-                    !plugin.SavedProfiles[i].Name.Contains(_groupProfileFilter, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                any = true;
-                bool sel = g.DestIndex == i;
-                if (ImGui.Selectable(plugin.SavedProfiles[i].Name, sel))
-                {
-                    g.DestIndex         = i;
-                    _groupProfileFilter = "";
-                }
-                if (sel) ImGui.SetItemDefaultFocus();
-            }
-            if (!any) ImGui.TextDisabled("No matches.");
-            ImGui.EndCombo();
+            var names = plugin.SavedTemplates.Select(t => t.Name).ToList();
+            int  idx  = g.TemplateIndex;
+            UiHelpers.DrawFilterableCombo("##grpdest", "##grpdestfilter", names,
+                ref idx, ref _groupProfileFilter, "— select a template —");
+            g.TemplateIndex = idx;
+        }
+        else
+        {
+            var names = plugin.SavedProfiles.Select(p => p.Name).ToList();
+            int  idx  = g.DestIndex;
+            UiHelpers.DrawFilterableCombo("##grpdest", "##grpdestfilter", names,
+                ref idx, ref _groupProfileFilter, "— select a profile —");
+            g.DestIndex = idx;
         }
 
         // ── MCDF origin ───────────────────────────────────────────────────────
@@ -717,8 +747,9 @@ public sealed class BrioTabView
         ImGui.Separator();
         ImGui.Spacing();
 
-        bool canSave  = plugin.SelectedBrioDestIndex >= 0
-                     && plugin.SelectedBrioDestIndex  < plugin.SavedProfiles.Count;
+        bool canSave  = plugin.Configuration.MorphTargetMode == MorphTargetMode.TemplateOverlay
+            ? plugin.SelectedBrioTemplateIndex >= 0 && plugin.SelectedBrioTemplateIndex < plugin.SavedTemplates.Count
+            : plugin.SelectedBrioDestIndex     >= 0 && plugin.SelectedBrioDestIndex     < plugin.SavedProfiles.Count;
         bool hasActor = plugin.SelectedBrioActorIndex >= 0;
         var  actors   = plugin.GetGPoseActors();
 
@@ -767,7 +798,7 @@ public sealed class BrioTabView
             {
                 ImGui.TextUnformatted(preset!.ProfileName);
                 ImGui.SameLine();
-                ImGui.TextDisabled($"({preset.Speed:F2}/s  {UiHelpers.ModeShort(preset.Mode)}  {UiHelpers.EasingShort(preset.Easing)})");
+                ImGui.TextDisabled($"({preset.Speed:F2}/s  {UiHelpers.ModeShort(preset.Mode)}  {UiHelpers.EasingShort(preset.Easing)}  {UiHelpers.TargetModeShort(preset.TargetMode)})");
 
                 // Second line: the captured target actor and MCDF origin.
                 if (preset.TargetActorName != null || preset.OriginMcdfLabel != null)

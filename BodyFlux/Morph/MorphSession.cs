@@ -4,7 +4,7 @@ using System.Numerics;
 namespace BodyFlux.Morph;
 
 /// <summary>One resolved step of a running sequence (destination JSON + speed + easing).</summary>
-public readonly record struct SeqStep(string DestJson, float Speed, EasingMode Easing);
+public readonly record struct SeqStep(string DestJson, float Speed, EasingMode Easing, MorphTargetMode TargetMode);
 
 /// <summary>
 /// All the state of a single in-flight morph, bundled so the plugin can run many at once

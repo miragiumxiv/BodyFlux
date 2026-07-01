@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Ipc.Exceptions;
 using Dalamud.Plugin.Services;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using BodyFlux.Morph;
 
 namespace BodyFlux.Ipc;
 
@@ -26,6 +30,7 @@ public sealed class CustomizePlusIpc : IDisposable
     private const string LabelSetTempProfile   = "CustomizePlus.Profile.SetTemporaryProfileOnCharacter";
     private const string LabelDeleteTempProfile = "CustomizePlus.Profile.DeleteTemporaryProfileOnCharacter";
     private const string LabelOnProfileUpdate  = "CustomizePlus.Profile.OnUpdate";
+    private const string LabelGetTemplates     = "CustomizePlus.Profile.GetTemplates";
 
     // ── Subscribers ───────────────────────────────────────────────────────────
     // IPCProfileDataTuple = (Guid, string Name, string VirtualPath, List<(string, ushort, byte, ushort)>, int Priority, bool IsEnabled)
@@ -35,6 +40,14 @@ public sealed class CustomizePlusIpc : IDisposable
     private readonly ICallGateSubscriber<Guid,   ValueTuple<int, string?>>        _getProfile;
     private readonly ICallGateSubscriber<ushort, string, ValueTuple<int, Guid?>> _setTempProfile;
     private readonly ICallGateSubscriber<ushort, int>                            _deleteTempProfile;
+
+    // IPCTemplateStatusTuple = (Guid UniqueId, string Name,
+    //   List<IPCBoneDataTuple = (string Name, Vector3 Translation, Vector3 Rotation, Vector3 Scale,
+    //        bool PropagateTranslation, bool PropagateRotation, bool PropagateScale,
+    //        Vector3 ChildScale, bool ChildScaleIndependent)> Bones, bool IsEnabled)
+    // Templates are enumerated per-profile — there is no global "all templates" IPC call.
+    private readonly ICallGateSubscriber<Guid, ValueTuple<int, List<ValueTuple<Guid, string,
+        List<(string, Vector3, Vector3, Vector3, bool, bool, bool, Vector3, bool)>, bool>>?>> _getTemplates;
 
     /// <summary>
     /// Optional — only present in Customize+ v4.3+.
@@ -60,6 +73,14 @@ public sealed class CustomizePlusIpc : IDisposable
     /// <summary>All saved profiles returned by the last <see cref="RefreshProfiles"/> call.</summary>
     public IReadOnlyList<(Guid Id, string Name)> Profiles { get; private set; } = [];
 
+    /// <summary>
+    /// All Templates found across every profile in <see cref="Profiles"/> (deduped by unique ID —
+    /// first profile that carries it wins), refreshed alongside <see cref="Profiles"/>. C+ only
+    /// exposes templates per-owning-profile, so <c>OwnerProfileId</c> is kept around to re-fetch a
+    /// template's bone data later via <see cref="GetTemplate"/>.
+    /// </summary>
+    public IReadOnlyList<(Guid Id, string Name, Guid OwnerProfileId)> Templates { get; private set; } = [];
+
     /// <summary>Display name of the profile currently active on the local player (index 0).</summary>
     public string ActiveProfileName { get; private set; } = "(none)";
 
@@ -75,6 +96,8 @@ public sealed class CustomizePlusIpc : IDisposable
         _getProfile        = pi.GetIpcSubscriber<Guid,   ValueTuple<int, string?>>(LabelGetProfile);
         _setTempProfile    = pi.GetIpcSubscriber<ushort, string, ValueTuple<int, Guid?>>(LabelSetTempProfile);
         _deleteTempProfile = pi.GetIpcSubscriber<ushort, int>(LabelDeleteTempProfile);
+        _getTemplates      = pi.GetIpcSubscriber<Guid, ValueTuple<int, List<ValueTuple<Guid, string,
+            List<(string, Vector3, Vector3, Vector3, bool, bool, bool, Vector3, bool)>, bool>>?>>(LabelGetTemplates);
 
         // GetTemporaryProfileOnCharacter is optional — register and silently null it if absent.
         try { _getTempProfile = pi.GetIpcSubscriber<ushort, ValueTuple<int, string?>>(LabelGetTempProfile); }
@@ -115,6 +138,20 @@ public sealed class CustomizePlusIpc : IDisposable
             ActiveProfileName  = (ec == 0 && activeId.HasValue)
                 ? Profiles.FirstOrDefault(p => p.Id == activeId.Value).Name ?? "(unknown)"
                 : "(none)";
+
+            // Templates are only enumerable per-owning-profile — walk every profile and flatten,
+            // deduping by unique ID (a template can be shared across several profiles).
+            var templates = new List<(Guid Id, string Name, Guid OwnerProfileId)>();
+            var seen       = new HashSet<Guid>();
+            foreach (var (profileId, _) in Profiles)
+            {
+                var (tec, list) = _getTemplates.InvokeFunc(profileId);
+                if (tec != 0 || list == null) continue;
+                foreach (var (templateId, templateName, _, _) in list)
+                    if (seen.Add(templateId))
+                        templates.Add((templateId, templateName, profileId));
+            }
+            Templates = templates.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch (IpcNotReadyError)
         {
@@ -135,6 +172,50 @@ public sealed class CustomizePlusIpc : IDisposable
         try   { return _getProfile.InvokeFunc(id); }
         catch (IpcNotReadyError)     { return (99, null); }
         catch (Exception ex)         { _log.Error(ex, "[BodyFlux] GetProfile threw."); return (98, null); }
+    }
+
+    /// <summary>
+    /// Fetches a single Template's bone data (by ID, from the profile that owns it — see
+    /// <see cref="Templates"/>) and wraps it as a minimal profile JSON string (<c>{"Bones": {...}}</c>)
+    /// so callers can treat it exactly like <see cref="GetProfile"/>'s output.
+    /// </summary>
+    public (int ec, string? json) GetTemplate(Guid ownerProfileId, Guid templateId)
+    {
+        try
+        {
+            var (ec, list) = _getTemplates.InvokeFunc(ownerProfileId);
+            if (ec != 0 || list == null) return (ec, null);
+
+            foreach (var (id, _, bones, _) in list)
+            {
+                if (id != templateId) continue;
+
+                var bonesJson = new JObject();
+                foreach (var (boneName, translation, rotation, scale,
+                              propagateTranslation, propagateRotation, propagateScale,
+                              childScale, childScaleIndependent) in bones)
+                {
+                    bonesJson[boneName] = new JObject
+                    {
+                        ["Translation"]           = BoneJsonHelper.Vec3Json(translation),
+                        ["Rotation"]              = BoneJsonHelper.Vec3Json(rotation),
+                        ["Scaling"]               = BoneJsonHelper.Vec3Json(scale),
+                        ["PropagateTranslation"]  = propagateTranslation,
+                        ["PropagateRotation"]     = propagateRotation,
+                        ["PropagateScale"]        = propagateScale,
+                        ["ChildScaling"]          = BoneJsonHelper.Vec3Json(childScale),
+                        ["ChildScaleIndependent"] = childScaleIndependent,
+                    };
+                }
+
+                var wrapper = new JObject { ["Bones"] = bonesJson };
+                return (0, wrapper.ToString(Formatting.None));
+            }
+
+            return (1, null); // template not found on this profile
+        }
+        catch (IpcNotReadyError)     { return (99, null); }
+        catch (Exception ex)         { _log.Error(ex, "[BodyFlux] GetTemplate threw."); return (98, null); }
     }
 
     /// <summary>

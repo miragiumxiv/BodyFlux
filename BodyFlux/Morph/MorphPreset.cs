@@ -8,6 +8,11 @@ namespace BodyFlux.Morph;
 /// MCDF origin and the GPose actor it was saved against, so Apply can restore the exact
 /// starting scaling and re-target the original actor. Player presets and history leave
 /// them at their defaults.
+///
+/// When <see cref="TargetMode"/> is <see cref="MorphTargetMode.TemplateOverlay"/>, <see cref="ProfileId"/>
+/// and <see cref="ProfileName"/> are reused to hold the selected Template's ID and name (not a
+/// Profile), and <see cref="TemplateOwnerProfileId"/> carries the profile that owns it — Customize+
+/// only exposes template bone data per-owning-profile, so that ID is needed to re-fetch it later.
 /// </summary>
 public record MorphPreset(
     Guid       ProfileId,
@@ -18,4 +23,6 @@ public record MorphPreset(
     string?    OriginMcdfJson   = null,
     string?    OriginMcdfLabel  = null,
     string?    TargetActorName  = null,
-    int        TargetActorIndex = -1);
+    int        TargetActorIndex = -1,
+    MorphTargetMode TargetMode  = MorphTargetMode.FullProfile,
+    Guid?      TemplateOwnerProfileId = null);

@@ -43,10 +43,12 @@ public sealed class MorphEngine
     public bool   BrioOriginLoaded => _brioOriginJson != null;
 
     // UI-facing selection state
-    public int     SelectedProfileIndex   { get; set; } = -1;
-    public int     SelectedBrioActorIndex { get; set; } = -1;
-    public int     SelectedBrioDestIndex  { get; set; } = -1;
-    public string? TargetPlayerName       { get; set; }
+    public int     SelectedProfileIndex      { get; set; } = -1;
+    public int     SelectedTemplateIndex     { get; set; } = -1;
+    public int     SelectedBrioActorIndex    { get; set; } = -1;
+    public int     SelectedBrioDestIndex     { get; set; } = -1;
+    public int     SelectedBrioTemplateIndex { get; set; } = -1;
+    public string? TargetPlayerName          { get; set; }
 
     // Player session projections (drive the Player tab)
     public bool       IsMorphing        => _player.Controller.IsMorphing;
@@ -209,13 +211,25 @@ public sealed class MorphEngine
     /// hands them to <see cref="MorphController"/> to start the transition. Optional overrides
     /// let callers (presets, history) supply per-morph values without touching saved config.
     /// </summary>
-    public void StartGrowth(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null)
+    public void StartGrowth(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null,
+                            MorphTargetMode? targetModeOverride = null)
     {
         if (_player.Controller.IsMorphing) return;
         _player.SpeedOverride = speedOverride;
 
-        var profiles = _ipc.Profiles;
-        if (SelectedProfileIndex < 0 || SelectedProfileIndex >= profiles.Count)
+        var resolvedTargetMode = targetModeOverride ?? _config.MorphTargetMode;
+
+        var profiles  = _ipc.Profiles;
+        var templates = _ipc.Templates;
+        if (resolvedTargetMode == MorphTargetMode.TemplateOverlay)
+        {
+            if (SelectedTemplateIndex < 0 || SelectedTemplateIndex >= templates.Count)
+            {
+                _log.Warning("[BodyFlux] No overlay template selected.");
+                return;
+            }
+        }
+        else if (SelectedProfileIndex < 0 || SelectedProfileIndex >= profiles.Count)
         {
             _log.Warning("[BodyFlux] No destination profile selected.");
             return;
@@ -282,10 +296,28 @@ public sealed class MorphEngine
         }
 
         // ── Fetch destination ─────────────────────────────────────────────────
-        var (ec3, destJson) = _ipc.GetProfile(profiles[SelectedProfileIndex].Id);
+        Guid    destId;
+        string  destName;
+        Guid?   templateOwnerProfileId = null;
+        int     ec3;
+        string? destJson;
+        if (resolvedTargetMode == MorphTargetMode.TemplateOverlay)
+        {
+            var t = templates[SelectedTemplateIndex];
+            destId                 = t.Id;
+            destName               = t.Name;
+            templateOwnerProfileId = t.OwnerProfileId;
+            (ec3, destJson)        = _ipc.GetTemplate(t.OwnerProfileId, t.Id);
+        }
+        else
+        {
+            destId          = profiles[SelectedProfileIndex].Id;
+            destName        = profiles[SelectedProfileIndex].Name;
+            (ec3, destJson) = _ipc.GetProfile(destId);
+        }
         if (ec3 != 0 || destJson == null)
         {
-            _log.Error($"[BodyFlux] GetByUniqueId (destination) failed (ec={ec3}).");
+            _log.Error($"[BodyFlux] Fetching morph destination failed (ec={ec3}).");
             return;
         }
 
@@ -304,18 +336,25 @@ public sealed class MorphEngine
         var resolvedMode   = modeOverride   ?? _config.MorphMode;
         var resolvedEasing = easingOverride ?? _config.EasingMode;
 
+        // Template Overlay: only the bones defined in the selected template should animate —
+        // everything else stays at the origin's value. Build a virtual destination that reflects
+        // that instead of changing MorphController's origin/destination interpolation.
+        var effectiveDestBones = resolvedTargetMode == MorphTargetMode.TemplateOverlay
+            ? BoneJsonHelper.BuildOverlayDestination(originBones, destBones)
+            : destBones;
+
         // In GPose, drive the root bone through Brio's model transform instead of C+ so it does
         // not fight Brio's pose-hold over n_root (the cause of the height flicker).
         TrySetupRootExternalisation(_player, targetIndex);
-        _player.Controller.Start(targetIndex, originJObj, originBones, destBones,
+        _player.Controller.Start(targetIndex, originJObj, originBones, effectiveDestBones,
                                  resolvedMode, resolvedEasing, _player.RootExternalised);
 
         _sync.ResetSendThrottle();
 
-        // Record in history (dedup by profile, newest first, cap at 5)
-        var (destId, destName) = profiles[SelectedProfileIndex];
+        // Record in history (dedup by destination, newest first, cap at 5)
         var historyEntry = new MorphPreset(destId, destName,
-            speedOverride ?? _config.GrowthSpeed, resolvedMode, resolvedEasing);
+            speedOverride ?? _config.GrowthSpeed, resolvedMode, resolvedEasing,
+            TargetMode: resolvedTargetMode, TemplateOwnerProfileId: templateOwnerProfileId);
         _config.RecentMorphs.RemoveAll(h => h.ProfileId == destId);
         _config.RecentMorphs.Insert(0, historyEntry);
         if (_config.RecentMorphs.Count > 5)
@@ -324,7 +363,7 @@ public sealed class MorphEngine
 
         string targetLabel = string.IsNullOrEmpty(TargetPlayerName) ? "self" : $"'{TargetPlayerName}'";
         _log.Information($"[BodyFlux] Morphing {_player.Controller.BoneCount} bones on {targetLabel}: " +
-                         $"→ '{profiles[SelectedProfileIndex].Name}'");
+                         $"→ '{destName}'");
     }
 
     public void PauseGrowth()   => _player.Controller.Pause();
@@ -370,7 +409,8 @@ public sealed class MorphEngine
     /// Starts a morph on the selected GPose actor. The origin is resolved in priority order:
     /// loaded MCDF → permanent C+ profile → identity (unscaled). Records the morph in Brio history.
     /// </summary>
-    public void StartBrioMorph(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null)
+    public void StartBrioMorph(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null,
+                               MorphTargetMode? targetModeOverride = null)
     {
         if (SelectedBrioActorIndex < 0)
         {
@@ -378,24 +418,42 @@ public sealed class MorphEngine
             return;
         }
 
-        var profiles = _ipc.Profiles;
-        if (SelectedBrioDestIndex < 0 || SelectedBrioDestIndex >= profiles.Count)
+        var resolvedTargetMode = targetModeOverride ?? _config.MorphTargetMode;
+
+        Guid  destId; string destName; Guid? templateOwnerProfileId = null;
+        if (resolvedTargetMode == MorphTargetMode.TemplateOverlay)
         {
-            _log.Warning("[BodyFlux] No destination profile selected.");
-            return;
+            var templates = _ipc.Templates;
+            if (SelectedBrioTemplateIndex < 0 || SelectedBrioTemplateIndex >= templates.Count)
+            {
+                _log.Warning("[BodyFlux] No overlay template selected.");
+                return;
+            }
+            var t = templates[SelectedBrioTemplateIndex];
+            destId = t.Id; destName = t.Name; templateOwnerProfileId = t.OwnerProfileId;
+        }
+        else
+        {
+            var profiles = _ipc.Profiles;
+            if (SelectedBrioDestIndex < 0 || SelectedBrioDestIndex >= profiles.Count)
+            {
+                _log.Warning("[BodyFlux] No destination profile selected.");
+                return;
+            }
+            (destId, destName) = profiles[SelectedBrioDestIndex];
         }
 
-        var (destId, destName) = profiles[SelectedBrioDestIndex];
         var resolvedMode   = modeOverride   ?? _config.MorphMode;
         var resolvedEasing = easingOverride ?? _config.BrioEasingMode;
 
         if (!StartBrioMorphFor((ushort)SelectedBrioActorIndex, destId, _brioOriginJson,
-                               speedOverride, resolvedMode, resolvedEasing))
+                               speedOverride, resolvedMode, resolvedEasing, resolvedTargetMode, templateOwnerProfileId))
             return;
 
-        // Record in Brio history (dedup by profile, newest first, cap at 5)
+        // Record in Brio history (dedup by destination, newest first, cap at 5)
         var historyEntry = new MorphPreset(destId, destName,
-            speedOverride ?? _config.BrioGrowthSpeed, resolvedMode, resolvedEasing);
+            speedOverride ?? _config.BrioGrowthSpeed, resolvedMode, resolvedEasing,
+            TargetMode: resolvedTargetMode, TemplateOwnerProfileId: templateOwnerProfileId);
         _config.BrioRecentMorphs.RemoveAll(h => h.ProfileId == destId);
         _config.BrioRecentMorphs.Insert(0, historyEntry);
         if (_config.BrioRecentMorphs.Count > 5)
@@ -409,15 +467,19 @@ public sealed class MorphEngine
     /// MCDF → permanent C+ profile → identity. <paramref name="speedOverride"/> null means
     /// "follow the live BrioGrowthSpeed slider". Returns false if the destination couldn't be read.
     /// </summary>
-    public bool StartBrioMorphFor(ushort actorIndex, Guid destProfileId, string? mcdfOriginJson,
-                                  float? speedOverride, MorphMode mode, EasingMode easing)
+    public bool StartBrioMorphFor(ushort actorIndex, Guid destId, string? mcdfOriginJson,
+                                  float? speedOverride, MorphMode mode, EasingMode easing,
+                                  MorphTargetMode targetMode = MorphTargetMode.FullProfile,
+                                  Guid? templateOwnerProfileId = null)
     {
         var originJson = ResolveBrioOrigin(actorIndex, mcdfOriginJson, out string originSource);
 
-        var (ec, destJson) = _ipc.GetProfile(destProfileId);
+        var (ec, destJson) = targetMode == MorphTargetMode.TemplateOverlay
+            ? _ipc.GetTemplate(templateOwnerProfileId ?? Guid.Empty, destId)
+            : _ipc.GetProfile(destId);
         if (ec != 0 || destJson == null)
         {
-            _log.Error($"[BodyFlux/Brio] GetProfile (destination) failed (ec={ec}).");
+            _log.Error($"[BodyFlux/Brio] Fetching morph destination failed (ec={ec}).");
             return false;
         }
 
@@ -425,6 +487,10 @@ public sealed class MorphEngine
         var destJObj    = JObject.Parse(destJson);
         var originBones = originJObj["Bones"] as JObject ?? new JObject();
         var destBones   = destJObj  ["Bones"] as JObject ?? new JObject();
+
+        var effectiveDestBones = targetMode == MorphTargetMode.TemplateOverlay
+            ? BoneJsonHelper.BuildOverlayDestination(originBones, destBones)
+            : destBones;
 
         var session = new MorphSession
         {
@@ -434,7 +500,7 @@ public sealed class MorphEngine
             SpeedOverride     = speedOverride,
         };
         TrySetupRootExternalisation(session, actorIndex);
-        session.Controller.Start(actorIndex, originJObj, originBones, destBones,
+        session.Controller.Start(actorIndex, originJObj, originBones, effectiveDestBones,
                                  mode, easing, session.RootExternalised);
         _brio[actorIndex] = session;
 
@@ -500,13 +566,15 @@ public sealed class MorphEngine
         var steps = new List<SeqStep>(sequence.Steps.Count);
         foreach (var step in sequence.Steps)
         {
-            var (ec, destJson) = _ipc.GetProfile(step.ProfileId);
+            var (ec, destJson) = step.TargetMode == MorphTargetMode.TemplateOverlay
+                ? _ipc.GetTemplate(step.TemplateOwnerProfileId ?? Guid.Empty, step.ProfileId)
+                : _ipc.GetProfile(step.ProfileId);
             if (ec != 0 || destJson == null)
             {
-                _log.Error($"[BodyFlux/Seq] Profile '{step.ProfileName}' not found (ec={ec}); aborting sequence.");
+                _log.Error($"[BodyFlux/Seq] '{step.ProfileName}' not found (ec={ec}); aborting sequence.");
                 return false;
             }
-            steps.Add(new SeqStep(destJson, speedOverride ?? step.Speed, step.Easing));
+            steps.Add(new SeqStep(destJson, speedOverride ?? step.Speed, step.Easing, step.TargetMode));
         }
 
         _player.SeqSteps          = steps;
@@ -578,7 +646,7 @@ public sealed class MorphEngine
                 _log.Error($"[BodyFlux/Seq] Profile '{step.ProfileName}' not found (ec={ec}); aborting sequence.");
                 return false;
             }
-            steps.Add(new SeqStep(destJson, step.Speed, step.Easing));
+            steps.Add(new SeqStep(destJson, step.Speed, step.Easing, step.TargetMode));
         }
 
         var session = new MorphSession
@@ -607,8 +675,12 @@ public sealed class MorphEngine
         var originBones = originJObj["Bones"] as JObject ?? new JObject();
         var destBones   = destJObj  ["Bones"] as JObject ?? new JObject();
 
+        var effectiveDestBones = step.TargetMode == MorphTargetMode.TemplateOverlay
+            ? BoneJsonHelper.BuildOverlayDestination(originBones, destBones)
+            : destBones;
+
         s.SpeedOverride = step.Speed;
-        s.Controller.Start(s.TargetIndex, originJObj, originBones, destBones,
+        s.Controller.Start(s.TargetIndex, originJObj, originBones, effectiveDestBones,
                            MorphMode.Simple, step.Easing, s.RootExternalised);
         if (s == _player)
             _sync.ResetSendThrottle();
@@ -637,17 +709,33 @@ public sealed class MorphEngine
     /// <summary>Applies a saved preset or history entry, overriding current UI selections.</summary>
     public void ApplyMorphPreset(MorphPreset preset, float? speedOverride = null)
     {
-        var profiles = _ipc.Profiles;
-        int idx = -1;
-        for (int i = 0; i < profiles.Count; i++)
-            if (profiles[i].Id == preset.ProfileId) { idx = i; break; }
-        if (idx < 0)
+        if (preset.TargetMode == MorphTargetMode.TemplateOverlay)
         {
-            _log.Warning($"[BodyFlux] Preset profile '{preset.ProfileName}' not found in Customize+.");
-            return;
+            var templates = _ipc.Templates;
+            int idx = -1;
+            for (int i = 0; i < templates.Count; i++)
+                if (templates[i].Id == preset.ProfileId) { idx = i; break; }
+            if (idx < 0)
+            {
+                _log.Warning($"[BodyFlux] Preset template '{preset.ProfileName}' not found in Customize+.");
+                return;
+            }
+            SelectedTemplateIndex = idx;
         }
-        SelectedProfileIndex = idx;
-        StartGrowth(speedOverride ?? preset.Speed, preset.Mode, preset.Easing);
+        else
+        {
+            var profiles = _ipc.Profiles;
+            int idx = -1;
+            for (int i = 0; i < profiles.Count; i++)
+                if (profiles[i].Id == preset.ProfileId) { idx = i; break; }
+            if (idx < 0)
+            {
+                _log.Warning($"[BodyFlux] Preset profile '{preset.ProfileName}' not found in Customize+.");
+                return;
+            }
+            SelectedProfileIndex = idx;
+        }
+        StartGrowth(speedOverride ?? preset.Speed, preset.Mode, preset.Easing, preset.TargetMode);
     }
 
     /// <summary>
@@ -657,16 +745,32 @@ public sealed class MorphEngine
     /// </summary>
     public void ApplyBrioMorphPreset(MorphPreset preset, float? speedOverride = null)
     {
-        var profiles = _ipc.Profiles;
-        int idx = -1;
-        for (int i = 0; i < profiles.Count; i++)
-            if (profiles[i].Id == preset.ProfileId) { idx = i; break; }
-        if (idx < 0)
+        if (preset.TargetMode == MorphTargetMode.TemplateOverlay)
         {
-            _log.Warning($"[BodyFlux/Brio] Preset profile '{preset.ProfileName}' not found in Customize+.");
-            return;
+            var templates = _ipc.Templates;
+            int idx = -1;
+            for (int i = 0; i < templates.Count; i++)
+                if (templates[i].Id == preset.ProfileId) { idx = i; break; }
+            if (idx < 0)
+            {
+                _log.Warning($"[BodyFlux/Brio] Preset template '{preset.ProfileName}' not found in Customize+.");
+                return;
+            }
+            SelectedBrioTemplateIndex = idx;
         }
-        SelectedBrioDestIndex = idx;
+        else
+        {
+            var profiles = _ipc.Profiles;
+            int idx = -1;
+            for (int i = 0; i < profiles.Count; i++)
+                if (profiles[i].Id == preset.ProfileId) { idx = i; break; }
+            if (idx < 0)
+            {
+                _log.Warning($"[BodyFlux/Brio] Preset profile '{preset.ProfileName}' not found in Customize+.");
+                return;
+            }
+            SelectedBrioDestIndex = idx;
+        }
 
         if (preset.TargetActorName != null)
         {
@@ -690,20 +794,34 @@ public sealed class MorphEngine
             BrioOriginLabel = preset.OriginMcdfLabel ?? "";
         }
 
-        StartBrioMorph(speedOverride ?? preset.Speed, preset.Mode, preset.Easing);
+        StartBrioMorph(speedOverride ?? preset.Speed, preset.Mode, preset.Easing, preset.TargetMode);
     }
 
     /// <summary>Saves the current UI selection into preset slot <paramref name="slot"/> (0-based).</summary>
     public void SavePreset(int slot)
     {
         if (slot < 0 || slot >= Configuration.PresetSlots) return;
-        var profiles = _ipc.Profiles;
-        if (SelectedProfileIndex < 0 || SelectedProfileIndex >= profiles.Count) return;
-        var (id, name) = profiles[SelectedProfileIndex];
+
+        Guid id; string name; Guid? templateOwnerProfileId = null;
+        if (_config.MorphTargetMode == MorphTargetMode.TemplateOverlay)
+        {
+            var templates = _ipc.Templates;
+            if (SelectedTemplateIndex < 0 || SelectedTemplateIndex >= templates.Count) return;
+            var t = templates[SelectedTemplateIndex];
+            id = t.Id; name = t.Name; templateOwnerProfileId = t.OwnerProfileId;
+        }
+        else
+        {
+            var profiles = _ipc.Profiles;
+            if (SelectedProfileIndex < 0 || SelectedProfileIndex >= profiles.Count) return;
+            (id, name) = profiles[SelectedProfileIndex];
+        }
+
         while (_config.Presets.Count <= slot)
             _config.Presets.Add(null);
         _config.Presets[slot] = new MorphPreset(id, name,
-            _config.GrowthSpeed, _config.MorphMode, _config.EasingMode);
+            _config.GrowthSpeed, _config.MorphMode, _config.EasingMode,
+            TargetMode: _config.MorphTargetMode, TemplateOwnerProfileId: templateOwnerProfileId);
         _config.Save();
     }
 
@@ -725,9 +843,21 @@ public sealed class MorphEngine
     public void SaveBrioPreset(int slot)
     {
         if (slot < 0 || slot >= Configuration.PresetSlots) return;
-        var profiles = _ipc.Profiles;
-        if (SelectedBrioDestIndex < 0 || SelectedBrioDestIndex >= profiles.Count) return;
-        var (id, name) = profiles[SelectedBrioDestIndex];
+
+        Guid id; string name; Guid? templateOwnerProfileId = null;
+        if (_config.MorphTargetMode == MorphTargetMode.TemplateOverlay)
+        {
+            var templates = _ipc.Templates;
+            if (SelectedBrioTemplateIndex < 0 || SelectedBrioTemplateIndex >= templates.Count) return;
+            var t = templates[SelectedBrioTemplateIndex];
+            id = t.Id; name = t.Name; templateOwnerProfileId = t.OwnerProfileId;
+        }
+        else
+        {
+            var profiles = _ipc.Profiles;
+            if (SelectedBrioDestIndex < 0 || SelectedBrioDestIndex >= profiles.Count) return;
+            (id, name) = profiles[SelectedBrioDestIndex];
+        }
 
         string? actorName = null;
         int     actorIdx  = -1;
@@ -742,7 +872,7 @@ public sealed class MorphEngine
         _config.BrioPresets[slot] = new MorphPreset(id, name,
             _config.BrioGrowthSpeed, _config.MorphMode, _config.BrioEasingMode,
             _brioOriginJson, _brioOriginJson != null ? BrioOriginLabel : null,
-            actorName, actorIdx);
+            actorName, actorIdx, _config.MorphTargetMode, templateOwnerProfileId);
         _config.Save();
     }
 
