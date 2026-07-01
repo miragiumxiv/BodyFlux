@@ -46,6 +46,7 @@ public sealed class Plugin : IDalamudPlugin
 
     // ── Properties forwarded from Customize+ IPC ──────────────────────────────
     public IReadOnlyList<(Guid Id, string Name)> SavedProfiles            => Ipc.Profiles;
+    public IReadOnlyList<(Guid Id, string Name, Guid OwnerProfileId)> SavedTemplates => Ipc.Templates;
     public string                                ActiveProfileName         => Ipc.ActiveProfileName;
     public bool                                  IsCustomizePlusAvailable  => Ipc.IsAvailable;
 
@@ -68,8 +69,10 @@ public sealed class Plugin : IDalamudPlugin
 
     // Selection state
     public int     SelectedProfileIndex   { get => Morph.SelectedProfileIndex;   set => Morph.SelectedProfileIndex   = value; }
+    public int     SelectedTemplateIndex  { get => Morph.SelectedTemplateIndex;  set => Morph.SelectedTemplateIndex  = value; }
     public int     SelectedBrioActorIndex { get => Morph.SelectedBrioActorIndex; set => Morph.SelectedBrioActorIndex = value; }
     public int     SelectedBrioDestIndex  { get => Morph.SelectedBrioDestIndex;  set => Morph.SelectedBrioDestIndex  = value; }
+    public int     SelectedBrioTemplateIndex { get => Morph.SelectedBrioTemplateIndex; set => Morph.SelectedBrioTemplateIndex = value; }
     public string? TargetPlayerName       { get => Morph.TargetPlayerName;       set => Morph.TargetPlayerName       = value; }
 
     // Brio origin
@@ -257,20 +260,24 @@ public sealed class Plugin : IDalamudPlugin
 
     public List<(ushort Index, string Name)> GetGPoseActors()        => Morph.GetGPoseActors();
 
-    public void StartGrowth(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null)
-        => Morph.StartGrowth(speedOverride, modeOverride, easingOverride);
+    public void StartGrowth(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null,
+                            MorphTargetMode? targetModeOverride = null)
+        => Morph.StartGrowth(speedOverride, modeOverride, easingOverride, targetModeOverride);
 
     public void PauseGrowth()   => Morph.PauseGrowth();
     public void ResumeGrowth()  => Morph.ResumeGrowth();
     public void ReverseGrowth() => Morph.ReverseGrowth();
     public void ResetGrowth()   => Morph.ResetGrowth();
 
-    public void StartBrioMorph(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null)
-        => Morph.StartBrioMorph(speedOverride, modeOverride, easingOverride);
+    public void StartBrioMorph(float? speedOverride = null, MorphMode? modeOverride = null, EasingMode? easingOverride = null,
+                               MorphTargetMode? targetModeOverride = null)
+        => Morph.StartBrioMorph(speedOverride, modeOverride, easingOverride, targetModeOverride);
 
-    public bool StartBrioMorphFor(ushort actorIndex, Guid destProfileId, string? mcdfOriginJson,
-                                  float? speedOverride, MorphMode mode, EasingMode easing)
-        => Morph.StartBrioMorphFor(actorIndex, destProfileId, mcdfOriginJson, speedOverride, mode, easing);
+    public bool StartBrioMorphFor(ushort actorIndex, Guid destId, string? mcdfOriginJson,
+                                  float? speedOverride, MorphMode mode, EasingMode easing,
+                                  MorphTargetMode targetMode = MorphTargetMode.FullProfile,
+                                  Guid? templateOwnerProfileId = null)
+        => Morph.StartBrioMorphFor(actorIndex, destId, mcdfOriginJson, speedOverride, mode, easing, targetMode, templateOwnerProfileId);
 
     public void PauseBrioActor(ushort index)   => Morph.PauseBrioActor(index);
     public void ResumeBrioActor(ushort index)  => Morph.ResumeBrioActor(index);

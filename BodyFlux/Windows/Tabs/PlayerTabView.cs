@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
@@ -18,9 +19,10 @@ public sealed class PlayerTabView
     private readonly SequenceListView  seqList;
     private readonly Action            onResetProfileCache; // ask MainWindow to refresh profiles next OnOpen
 
-    private string _profileFilter   = "";
-    private int    _seqPlayingIndex = -1; // sequence active/resting (-1 = none)
-    private string _seqAddFilter    = ""; // filter for the "Add step" picker
+    private string          _profileFilter   = "";
+    private int             _seqPlayingIndex = -1; // sequence active/resting (-1 = none)
+    private string          _seqAddFilter    = ""; // filter for the "Add step" picker
+    private MorphTargetMode _seqAddMode      = MorphTargetMode.FullProfile; // "Add step" target mode
 
     public PlayerTabView(Plugin plugin, SequenceListView seqList, Action onResetProfileCache)
     {
@@ -106,52 +108,71 @@ public sealed class PlayerTabView
         bool  busy   = plugin.IsMorphing;
         var   config = plugin.Configuration;
 
+        // ── Target mode selector ──────────────────────────────────────────────
+        ImGui.TextUnformatted("Morph Target:");
+        ImGui.Spacing();
+
+        using (ImRaii.Disabled(busy))
+        {
+            int  targetModeInt     = (int)config.MorphTargetMode;
+            bool targetModeChanged = false;
+
+            if (ImGui.RadioButton("Full Profile", ref targetModeInt, (int)MorphTargetMode.FullProfile))
+                targetModeChanged = true;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Template Overlay", ref targetModeInt, (int)MorphTargetMode.TemplateOverlay))
+                targetModeChanged = true;
+
+            if (targetModeChanged)
+            {
+                config.MorphTargetMode = (MorphTargetMode)targetModeInt;
+                config.Save();
+            }
+        }
+
+        bool overlay = config.MorphTargetMode == MorphTargetMode.TemplateOverlay;
+
+        ImGui.Spacing();
+        ImGui.PushTextWrapPos(0f);
+        string targetModeDesc = overlay
+            ? "Blends only the bones defined in the selected Customize+ Template onto your current profile — every other bone stays untouched."
+            : "Applies the whole selected profile as the destination — bones not present in it reset to default.";
+        ImGui.TextDisabled(targetModeDesc);
+        ImGui.PopTextWrapPos();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
         // ── Destination selector ──────────────────────────────────────────────
-        ImGui.TextUnformatted("Destination Profile:");
+        ImGui.TextUnformatted(overlay ? "Overlay Template:" : "Destination Profile:");
+        if (overlay)
+        {
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextDisabled("Only templates attached to at least one Customize+ profile show up here.");
+            ImGui.PopTextWrapPos();
+        }
 
         float comboWidth = ImGui.GetContentRegionAvail().X - (bw + 8 * ImGuiHelpers.GlobalScale);
         ImGui.SetNextItemWidth(comboWidth);
 
-        string preview = plugin.SelectedProfileIndex >= 0 && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count
-            ? plugin.SavedProfiles[plugin.SelectedProfileIndex].Name
-            : "— select a profile —";
-
         using (ImRaii.Disabled(busy))
         {
-            if (ImGui.BeginCombo("##DestProfile", preview))
+            if (overlay)
             {
-                if (ImGui.IsWindowAppearing())
-                {
-                    _profileFilter = "";
-                    ImGui.SetKeyboardFocusHere();
-                }
-
-                ImGui.SetNextItemWidth(-1);
-                ImGui.InputText("##ProfileFilter", ref _profileFilter, 128);
-                ImGui.Separator();
-
-                bool anyVisible = false;
-                for (int i = 0; i < plugin.SavedProfiles.Count; i++)
-                {
-                    if (!string.IsNullOrEmpty(_profileFilter) &&
-                        !plugin.SavedProfiles[i].Name.Contains(_profileFilter, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    anyVisible = true;
-                    bool selected = plugin.SelectedProfileIndex == i;
-                    if (ImGui.Selectable(plugin.SavedProfiles[i].Name, selected))
-                    {
-                        plugin.SelectedProfileIndex = i;
-                        _profileFilter = "";
-                    }
-                    if (selected)
-                        ImGui.SetItemDefaultFocus();
-                }
-
-                if (!anyVisible)
-                    ImGui.TextDisabled("No matches.");
-
-                ImGui.EndCombo();
+                var names = plugin.SavedTemplates.Select(t => t.Name).ToList();
+                int  idx  = plugin.SelectedTemplateIndex;
+                UiHelpers.DrawFilterableCombo("##DestTemplate", "##TemplateFilter", names,
+                    ref idx, ref _profileFilter, "— select a template —");
+                plugin.SelectedTemplateIndex = idx;
+            }
+            else
+            {
+                var names = plugin.SavedProfiles.Select(p => p.Name).ToList();
+                int  idx  = plugin.SelectedProfileIndex;
+                UiHelpers.DrawFilterableCombo("##DestProfile", "##ProfileFilter", names,
+                    ref idx, ref _profileFilter, "— select a profile —");
+                plugin.SelectedProfileIndex = idx;
             }
         }
 
@@ -161,10 +182,11 @@ public sealed class PlayerTabView
             if (ImGui.Button("Refresh", new Vector2(bw, 0)))
             {
                 plugin.RefreshProfiles();
-                plugin.SelectedProfileIndex = -1;
+                plugin.SelectedProfileIndex  = -1;
+                plugin.SelectedTemplateIndex = -1;
             }
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip("Reload your Customize+ profile list\nfrom the latest saved profiles.");
+                ImGui.SetTooltip("Reload your Customize+ profile and template list\nfrom the latest saved profiles.");
         }
 
         ImGui.Spacing();
@@ -368,9 +390,10 @@ public sealed class PlayerTabView
         }
         else
         {
-            bool canStart = plugin.SelectedProfileIndex >= 0
-                         && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count
-                         && plugin.Progress < 1f;
+            bool hasDestination = plugin.Configuration.MorphTargetMode == MorphTargetMode.TemplateOverlay
+                ? plugin.SelectedTemplateIndex >= 0 && plugin.SelectedTemplateIndex < plugin.SavedTemplates.Count
+                : plugin.SelectedProfileIndex  >= 0 && plugin.SelectedProfileIndex  < plugin.SavedProfiles.Count;
+            bool canStart = hasDestination && plugin.Progress < 1f;
 
             string? target     = plugin.TargetPlayerName;
             bool    isTargeted = !string.IsNullOrEmpty(target) && plugin.IsNetworkActive;
@@ -463,7 +486,7 @@ public sealed class PlayerTabView
             ImGui.SameLine();
             ImGui.TextUnformatted(entry.ProfileName);
             ImGui.SameLine();
-            ImGui.TextDisabled($"({entry.Speed:F2}/s  {UiHelpers.ModeShort(entry.Mode)}  {UiHelpers.EasingShort(entry.Easing)})");
+            ImGui.TextDisabled($"({entry.Speed:F2}/s  {UiHelpers.ModeShort(entry.Mode)}  {UiHelpers.EasingShort(entry.Easing)}  {UiHelpers.TargetModeShort(entry.TargetMode)})");
         }
 
         if (toApply != null)
@@ -490,8 +513,9 @@ public sealed class PlayerTabView
         ImGui.Separator();
         ImGui.Spacing();
 
-        bool canSave = plugin.SelectedProfileIndex >= 0
-                    && plugin.SelectedProfileIndex < plugin.SavedProfiles.Count;
+        bool canSave = config.MorphTargetMode == MorphTargetMode.TemplateOverlay
+            ? plugin.SelectedTemplateIndex >= 0 && plugin.SelectedTemplateIndex < plugin.SavedTemplates.Count
+            : plugin.SelectedProfileIndex  >= 0 && plugin.SelectedProfileIndex  < plugin.SavedProfiles.Count;
 
         for (int i = 0; i < Configuration.PresetSlots; i++)
         {
@@ -524,7 +548,7 @@ public sealed class PlayerTabView
             {
                 ImGui.TextUnformatted(preset!.ProfileName);
                 ImGui.SameLine();
-                ImGui.TextDisabled($"({preset.Speed:F2}/s  {UiHelpers.ModeShort(preset.Mode)}  {UiHelpers.EasingShort(preset.Easing)})");
+                ImGui.TextDisabled($"({preset.Speed:F2}/s  {UiHelpers.ModeShort(preset.Mode)}  {UiHelpers.EasingShort(preset.Easing)}  {UiHelpers.TargetModeShort(preset.TargetMode)})");
             }
             else
             {
@@ -562,7 +586,7 @@ public sealed class PlayerTabView
         ImGui.Spacing();
 
         int playRequest = seqList.Draw(
-            config.Sequences, ref _seqPlayingIndex, ref _seqAddFilter,
+            config.Sequences, ref _seqPlayingIndex, ref _seqAddFilter, ref _seqAddMode,
             config.GrowthSpeed, busy, seqActive, playAllowed: true, null,
             onReset: plugin.ResetGrowth, bw, scale);
 

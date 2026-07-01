@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using Dalamud.Bindings.ImGui;
 using BodyFlux.Morph;
 
 namespace BodyFlux.Windows.Tabs;
@@ -25,4 +28,50 @@ internal static class UiHelpers
         EasingMode.EaseInOut => "In-Out",
         _                    => "Linear"
     };
+
+    public static string TargetModeShort(MorphTargetMode m) => m switch
+    {
+        MorphTargetMode.TemplateOverlay => "Overlay",
+        _                               => "Full"
+    };
+
+    /// <summary>
+    /// Filterable, searchable combo box over a flat list of names — shared by every destination
+    /// picker (Player/Brio Single, Group rows, Sequence add-step), which each switch between
+    /// listing Profiles or Templates depending on the current <see cref="MorphTargetMode"/>.
+    /// </summary>
+    public static void DrawFilterableCombo(string comboId, string filterId, IReadOnlyList<string> names,
+        ref int selectedIndex, ref string filter, string placeholder)
+    {
+        string preview = selectedIndex >= 0 && selectedIndex < names.Count ? names[selectedIndex] : placeholder;
+        if (!ImGui.BeginCombo(comboId, preview)) return;
+
+        if (ImGui.IsWindowAppearing())
+        {
+            filter = "";
+            ImGui.SetKeyboardFocusHere();
+        }
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText(filterId, ref filter, 128);
+        ImGui.Separator();
+
+        bool any = false;
+        for (int i = 0; i < names.Count; i++)
+        {
+            if (!string.IsNullOrEmpty(filter) && !names[i].Contains(filter, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            any = true;
+            bool sel = selectedIndex == i;
+            if (ImGui.Selectable(names[i], sel))
+            {
+                selectedIndex = i;
+                filter        = "";
+            }
+            if (sel) ImGui.SetItemDefaultFocus();
+        }
+
+        if (!any) ImGui.TextDisabled("No matches.");
+        ImGui.EndCombo();
+    }
 }

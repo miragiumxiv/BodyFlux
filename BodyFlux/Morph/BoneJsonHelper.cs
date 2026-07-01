@@ -65,6 +65,22 @@ internal static class BoneJsonHelper
         return false;
     }
 
+    /// <summary>
+    /// Builds a virtual destination "Bones" node for <see cref="MorphTargetMode.TemplateOverlay"/>: a
+    /// deep clone of <paramref name="originBones"/> with every bone present in
+    /// <paramref name="overlayBones"/> replaced by that bone's entry. Bones absent from the overlay
+    /// stay identical to the origin, so <see cref="MorphController"/>'s ordinary origin/destination
+    /// interpolation leaves them static — only the overlaid bones actually animate.
+    /// </summary>
+    public static JObject BuildOverlayDestination(JObject originBones, JObject overlayBones)
+    {
+        var merged = (JObject)originBones.DeepClone();
+        foreach (var prop in overlayBones.Properties())
+            if (prop.Value is JObject overlayBone)
+                merged[prop.Name] = (JObject)overlayBone.DeepClone();
+        return merged;
+    }
+
     // ── Bone write ────────────────────────────────────────────────────────────
 
     /// <summary>

@@ -32,6 +32,9 @@ public class Configuration : IPluginConfiguration
     // How the morph plays back — once, one full loop, or continuously.
     public MorphMode   MorphMode      { get; set; } = MorphMode.Simple;
 
+    // Whether a morph replaces the whole profile or only overlays the destination's bones.
+    public MorphTargetMode MorphTargetMode { get; set; } = MorphTargetMode.FullProfile;
+
     // Easing curve applied to the interpolation progress each frame.
     public EasingMode EasingMode     { get; set; } = EasingMode.Linear;
     public EasingMode BrioEasingMode { get; set; } = EasingMode.Linear;
